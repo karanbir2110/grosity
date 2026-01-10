@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Supabase Connection Test</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        .success { color: green; }
+        .error { color: red; }
+        pre { background: #f5f5f5; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Supabase Connection Test</h1>
+    
+    <div>
+        <label>Supabase URL:</label><br>
+        <input id="url" type="text" style="width: 400px;" 
+               value="https://dtnnozzuixtaomabgfxf.supabase.co"><br><br>
+        
+        <label>Service Role Key:</label><br>
+        <input id="key" type="text" style="width: 500px;" 
+               value="sb_secret_2Y0zJ0cTlB2BxLb3ckMGXA_6UG_6hL7"><br><br>
+        
+        <button onclick="testConnection()">Test Connection</button>
+    </div>
+    
+    <div id="result" style="margin-top: 20px;"></div>
+    <pre id="console"></pre>
+    
+    <script>
+        function log(msg) {
+            const consoleDiv = document.getElementById('console');
+            consoleDiv.innerHTML += msg + '\n';
+            console.log(msg);
+        }
+        
+        async function testConnection() {
+            const url = document.getElementById('url').value;
+            const key = document.getElementById('key').value;
+            const resultDiv = document.getElementById('result');
+            
+            log('🔗 Testing connection...');
+            log('URL: ' + url);
+            log('Key: ' + key.substring(0, 20) + '...');
+            
+            try {
+                // Create client
+                const supabase = window.supabase.createClient(url, key, {
+                    auth: { persistSession: false }
+                });
+                
+                log('✅ Supabase client created');
+                
+                // Test 1: List tables
+                log('📊 Testing query...');
+                const { data, error } = await supabase
+                    .from('products')
+                    .select('id, name, price')
+                    .limit(3);
+                
+                if (error) {
+                    log('❌ Error: ' + error.message);
+                    log('Code: ' + error.code);
+                    log('Details: ' + JSON.stringify(error.details));
+                    resultDiv.innerHTML = `<div class="error">❌ FAILED: ${error.message}</div>`;
+                    return;
+                }
+                
+                log(`✅ SUCCESS! Found ${data.length} products`);
+                log('Sample: ' + JSON.stringify(data[0]));
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        ✅ CONNECTION SUCCESSFUL!<br>
+                        Found ${data.length} products<br>
+                        First: ${data[0]?.name} (₹${data[0]?.price})
+                    </div>
+                `;
+                
+            } catch (error) {
+                log('❌ JavaScript Error: ' + error.message);
+                resultDiv.innerHTML = `<div class="error">❌ JavaScript Error: ${error.message}</div>`;
+            }
+        }
+        
+        // Auto-test if URL and Key are filled
+        setTimeout(() => {
+            const url = document.getElementById('url').value;
+            const key = document.getElementById('key').value;
+            if (url && !url.includes('YOUR-PROJECT') && key && !key.includes('eyJhbGci')) {
+                testConnection();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

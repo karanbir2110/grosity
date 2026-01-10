@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - Fresh Grocery</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+        }
+        
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+        
+        h1 {
+            color: #2e7d32;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #4b5563;
+            font-weight: 600;
+        }
+        
+        input {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #2e7d32;
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 16px;
+            background: #2e7d32;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-top: 10px;
+        }
+        
+        .login-btn:hover {
+            background: #1b5e20;
+        }
+        
+        .instructions {
+            margin-top: 25px;
+            padding: 15px;
+            background: #f0fdf4;
+            border-radius: 10px;
+            color: #065f46;
+            font-size: 14px;
+            border-left: 4px solid #10b981;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>🔐 Admin Login</h1>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" placeholder="admin@freshgrocery.com" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" placeholder="Enter password" required>
+            </div>
+            
+            <button type="submit" class="login-btn">Login to Dashboard</button>
+        </form>
+        
+        <div class="instructions">
+            <strong>Default Credentials:</strong><br>
+            Email: admin@freshgrocery.com<br>
+            Password: admin123
+        </div>
+    </div>
+    
+    <script>
+        // Check if already logged in
+        if (sessionStorage.getItem('admin_logged_in') === 'true') {
+            window.location.href = 'dashboard.html';
+        }
+        
+        // Handle login form
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            // Check credentials
+            if (email === 'admin@freshgrocery.com' && password === 'admin123') {
+                // Save login status
+                sessionStorage.setItem('admin_logged_in', 'true');
+                localStorage.setItem('admin_logged_in', 'true');
+                
+                console.log('✅ Login successful, redirecting...');
+                
+                // Redirect to dashboard
+                window.location.href = 'dashboard.html';
+            } else {
+                alert('❌ Wrong email or password!\n\nUse: admin@freshgrocery.com\nPassword: admin123');
+            }
+        });
+    </script>
+        <!-- Load Supabase JS library FIRST -->
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    
+    <!-- Then load your config -->
+    <script src="config.js"></script>
+</body>
+</html>
