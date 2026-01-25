@@ -54,10 +54,10 @@ export default function Register() {
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center space-x-2 text-green-600 mb-6">
             <Leaf className="h-10 w-10" />
-            <span className="text-3xl font-bold">FreshHarvest</span>
+            <span className="text-5xl font-bold">Grosity</span>
           </Link>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Create Account</h1>
-          <p className="text-gray-600">Join us for fresh produce delivery</p>
+          <p className="text-gray-600">Join us to get your order Delivered</p>
         </div>
 
         <div className="bg-white rounded-lg shadow-xl p-8">
@@ -80,7 +80,7 @@ export default function Register() {
                 }
                 required
                 className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-600"
-                placeholder="John Doe"
+                placeholder="Fresh Farmer"
               />
             </div>
 

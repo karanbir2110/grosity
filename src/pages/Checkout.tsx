@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, Lock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -11,9 +11,21 @@ interface ProfileForm {
   address: string;
 }
 
+// Predefined delivery locations
+const DELIVERY_LOCATIONS = [
+  { id: 'hostel_a', name: 'Hostel A', description: 'Main Block' },
+  { id: 'hostel_b', name: 'Hostel B', description: 'Near Sports Complex' },
+  { id: 'hostel_c', name: 'Hostel C', description: 'New Building' },
+  { id: 'hostel_d', name: 'Hostel D', description: 'International Hostel' },
+  { id: 'library', name: 'Central Library', description: 'Main Campus' },
+  { id: 'cafeteria', name: 'Main Cafeteria', description: 'Food Court Area' },
+  { id: 'admin_block', name: 'Administration Block', description: 'Reception Desk' },
+  { id: 'sports_complex', name: 'Sports Complex', description: 'Entrance Gate' },
+];
+
 export default function Checkout() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { items, totalPrice, clearCart } = useCart();
 
   const [loading, setLoading] = useState(false);
@@ -24,6 +36,24 @@ export default function Checkout() {
     mobile: '',
     address: '',
   });
+
+  // Track selected delivery location
+  const [selectedLocation, setSelectedLocation] = useState<string>('');
+
+  /* =======================
+     AUTH CHECK REDIRECT
+     ======================= */
+  useEffect(() => {
+    if (!authLoading && !user) {
+      // Redirect to login if not authenticated
+      navigate('/login', { 
+        state: { 
+          from: '/checkout',
+          message: 'Please login to complete your purchase'
+        } 
+      });
+    }
+  }, [user, authLoading, navigate]);
 
   /* =======================
      FETCH PROFILE
@@ -44,6 +74,14 @@ export default function Checkout() {
           mobile: data.mobile ?? '',
           address: data.address ?? '',
         });
+        
+        // Check if saved address matches any predefined location
+        const matchedLocation = DELIVERY_LOCATIONS.find(
+          loc => data.address?.includes(loc.name) || data.address === loc.id
+        );
+        if (matchedLocation) {
+          setSelectedLocation(matchedLocation.id);
+        }
       }
     };
 
@@ -92,6 +130,74 @@ export default function Checkout() {
   }
 
   /* =======================
+     AUTH LOADING STATE
+     ======================= */
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-12">
+        <div className="max-w-2xl mx-auto px-4 text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-600 mx-auto mb-6"></div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-4">
+            Loading...
+          </h1>
+          <p className="text-gray-600 mb-6">
+            Checking your authentication status
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* =======================
+     NOT LOGGED IN STATE
+     ======================= */
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-12">
+        <div className="max-w-2xl mx-auto px-4 text-center">
+          <Lock className="h-24 w-24 text-gray-300 mx-auto mb-6" />
+          <h1 className="text-3xl font-bold text-gray-900 mb-4">
+            Authentication Required
+          </h1>
+          <p className="text-gray-600 mb-6">
+            You need to be logged in to complete your purchase.
+          </p>
+          <div className="flex flex-col sm:flex-row justify-center gap-4">
+            <button
+              onClick={() => navigate('/login', { 
+                state: { from: '/checkout' } 
+              })}
+              className="bg-green-600 text-white px-8 py-3 rounded-lg hover:bg-green-700 font-semibold transition-colors"
+            >
+              Login to Continue
+            </button>
+            <button
+              onClick={() => navigate('/shop')}
+              className="bg-white text-green-600 px-8 py-3 rounded-lg border-2 border-green-600 font-semibold hover:bg-green-50 transition-colors"
+            >
+              Continue Shopping
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* =======================
+     HANDLE LOCATION SELECTION
+     ======================= */
+  const handleLocationSelect = (locationId: string) => {
+    setSelectedLocation(locationId);
+    const location = DELIVERY_LOCATIONS.find(loc => loc.id === locationId);
+    if (location) {
+      setProfile(prev => ({
+        ...prev,
+        address: `${location.name} - ${location.description}`
+      }));
+    }
+  };
+
+  /* =======================
      PLACE ORDER
      ======================= */
   const handleSubmit = async (e: FormEvent) => {
@@ -104,6 +210,11 @@ export default function Checkout() {
 
     if (!profile.full_name || !profile.mobile || !profile.address) {
       alert('Please fill all details');
+      return;
+    }
+
+    if (!selectedLocation) {
+      alert('Please select a delivery location');
       return;
     }
 
@@ -145,6 +256,7 @@ export default function Checkout() {
           user_id: user.id,
           total_amount: finalTotal,
           status: 'pending',
+          delivery_location: selectedLocation,
         })
         .select('id')
         .single();
@@ -169,7 +281,6 @@ export default function Checkout() {
       if (orderItemsError) throw orderItemsError;
 
       /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
-      // Create an array of update promises for each product
       const updateStockPromises = items.map(item => 
         (supabase as any)
           .from('products')
@@ -179,15 +290,11 @@ export default function Checkout() {
           .eq('id', item.product.id)
       );
 
-      // Execute all stock updates
       const updateResults = await Promise.all(updateStockPromises);
       
-      // Check for any errors in stock updates
       const stockUpdateErrors = updateResults.filter(result => result.error);
       if (stockUpdateErrors.length > 0) {
         console.error('Stock update errors:', stockUpdateErrors);
-        // Optional: You could rollback the order here if stock updates fail
-        // For now, we'll just log it but continue with the order
       }
 
       clearCart();
@@ -229,7 +336,7 @@ export default function Checkout() {
                 <span className="font-medium">Mobile:</span> {profile.mobile}
               </p>
               <p className="text-gray-700">
-                <span className="font-medium">Address:</span> {profile.address}
+                <span className="font-medium">Delivery Point:</span> {profile.address}
               </p>
             </div>
           </div>
@@ -277,6 +384,21 @@ export default function Checkout() {
               onSubmit={handleSubmit}
               className="bg-white rounded-xl shadow-md p-6 md:p-8"
             >
+              {/* User Info Badge */}
+              <div className="mb-6 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 bg-green-100 rounded-full flex items-center justify-center">
+                    <span className="text-green-600 font-bold">
+                      {user?.email?.[0]?.toUpperCase()}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-sm text-green-800 font-medium">Logged in as</p>
+                    <p className="text-green-900">{user?.email}</p>
+                  </div>
+                </div>
+              </div>
+
               <h2 className="text-xl font-bold text-gray-800 mb-6">
                 Delivery Information
               </h2>
@@ -319,27 +441,79 @@ export default function Checkout() {
                   <p className="text-xs text-gray-500 mt-1">10-digit mobile number without country code</p>
                 </div>
 
-                {/* Address Field */}
+                {/* Delivery Location Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Delivery Address *
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Select Delivery Point *
                   </label>
-                  <textarea
-                    value={profile.address}
-                    onChange={e =>
-                      setProfile({ ...profile, address: e.target.value })
-                    }
-                    placeholder="House no., Building, Street, Area, City, State, Pincode"
-                    rows={4}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition resize-none"
-                    required
-                  />
+                  <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
+                    {DELIVERY_LOCATIONS.map(location => (
+                      <div
+                        key={location.id}
+                        className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
+                          selectedLocation === location.id
+                            ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                        }`}
+                        onClick={() => handleLocationSelect(location.id)}
+                      >
+                        <div className="flex items-center h-5">
+                          <input
+                            type="radio"
+                            name="delivery-location"
+                            checked={selectedLocation === location.id}
+                            onChange={() => handleLocationSelect(location.id)}
+                            className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
+                          />
+                        </div>
+                        <div className="ml-3 flex-1">
+                          <label className="block text-sm font-medium text-gray-800">
+                            {location.name}
+                          </label>
+                          <p className="text-sm text-gray-500 mt-1">
+                            {location.description}
+                          </p>
+                          {selectedLocation === location.id && (
+                            <div className="mt-2 flex items-center text-green-600 text-sm">
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                              <span>Selected for delivery</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className={`h-3 w-3 rounded-full ml-2 ${
+                          selectedLocation === location.id 
+                            ? 'bg-green-500' 
+                            : 'bg-gray-300'
+                        }`} />
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Selected Location Display */}
+                  {selectedLocation && (
+                    <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-800 font-medium">
+                        Selected Delivery Point:
+                      </p>
+                      <p className="text-green-900">
+                        {DELIVERY_LOCATIONS.find(loc => loc.id === selectedLocation)?.name}
+                      </p>
+                      <p className="text-sm text-green-700 mt-1">
+                        {DELIVERY_LOCATIONS.find(loc => loc.id === selectedLocation)?.description}
+                      </p>
+                    </div>
+                  )}
+                  
+                  <p className="text-xs text-gray-500 mt-3">
+                    Note: We only deliver to these predefined points on campus. 
+                    Please collect your order from the selected location.
+                  </p>
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !selectedLocation}
                 className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg"
               >
                 {loading ? 'Processing Order...' : 'Place Order'}
@@ -347,7 +521,7 @@ export default function Checkout() {
             </form>
           </div>
 
-          {/* RIGHT COLUMN - ORDER SUMMARY (OPTIMIZED) */}
+          {/* RIGHT COLUMN - ORDER SUMMARY */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl shadow-md p-6 sticky top-24">
               <h2 className="text-xl font-bold text-gray-800 mb-6">

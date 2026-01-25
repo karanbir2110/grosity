@@ -121,7 +121,7 @@ export default function Contact() {
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   required
                   className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-600"
-                  placeholder="John Doe"
+                  placeholder="Fresh Farmer"
                 />
               </div>
 

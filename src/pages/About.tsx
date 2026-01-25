@@ -5,7 +5,7 @@ export default function About() {
     <div className="min-h-screen bg-white">
       <div className="bg-gradient-to-br from-green-50 to-emerald-100 py-20">
         <div className="max-w-7xl mx-auto px-4 text-center">
-          <h1 className="text-5xl font-bold text-gray-900 mb-6">About FreshHarvest</h1>
+          <h1 className="text-5xl font-bold text-gray-900 mb-6">About Grosity</h1>
           <p className="text-xl text-gray-600 max-w-3xl mx-auto">
             Delivering farm-fresh produce to your doorstep since 2025
           </p>
@@ -17,7 +17,7 @@ export default function About() {
           <div>
             <h2 className="text-4xl font-bold text-gray-900 mb-6">Our Story</h2>
             <p className="text-gray-600 mb-4 leading-relaxed">
-              FreshHarvest was born from a simple idea: everyone deserves access to fresh, healthy, and
+              Grosity was born from a simple idea: everyone deserves access to fresh, healthy, and
               organic produce. We started as a small family business connecting local farmers with urban
               consumers, and we've grown into a trusted name in fresh produce delivery.
             </p>
