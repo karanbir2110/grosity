@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag, Lock } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, Lock, MapPin } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -11,17 +11,14 @@ interface ProfileForm {
   address: string;
 }
 
-// Predefined delivery locations
-const DELIVERY_LOCATIONS = [
-  { id: 'hostel_a', name: 'Hostel A', description: 'Main Block' },
-  { id: 'hostel_b', name: 'Hostel B', description: 'Near Sports Complex' },
-  { id: 'hostel_c', name: 'Hostel C', description: 'New Building' },
-  { id: 'hostel_d', name: 'Hostel D', description: 'International Hostel' },
-  { id: 'library', name: 'Central Library', description: 'Main Campus' },
-  { id: 'cafeteria', name: 'Main Cafeteria', description: 'Food Court Area' },
-  { id: 'admin_block', name: 'Administration Block', description: 'Reception Desk' },
-  { id: 'sports_complex', name: 'Sports Complex', description: 'Entrance Gate' },
-];
+interface DeliveryLocation {
+  id: string;
+  name: string;
+  description: string;
+  delivery_fee: number;
+  is_active: boolean;
+  order_index: number;
+}
 
 export default function Checkout() {
   const navigate = useNavigate();
@@ -30,6 +27,8 @@ export default function Checkout() {
 
   const [loading, setLoading] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(true);
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
@@ -39,6 +38,37 @@ export default function Checkout() {
 
   // Track selected delivery location
   const [selectedLocation, setSelectedLocation] = useState<string>('');
+
+  /* =======================
+     FETCH DELIVERY LOCATIONS
+     ======================= */
+  useEffect(() => {
+    const fetchDeliveryLocations = async () => {
+      try {
+        setLocationsLoading(true);
+        const { data, error } = await supabase
+          .from('delivery_locations')
+          .select('*')
+          .eq('is_active', true)
+          .order('order_index');
+
+        if (error) {
+          console.error('Error fetching delivery locations:', error);
+          return;
+        }
+
+        if (data) {
+          setDeliveryLocations(data as DeliveryLocation[]);
+        }
+      } catch (err) {
+        console.error('Error in fetchDeliveryLocations:', err);
+      } finally {
+        setLocationsLoading(false);
+      }
+    };
+
+    fetchDeliveryLocations();
+  }, []);
 
   /* =======================
      AUTH CHECK REDIRECT
@@ -88,12 +118,14 @@ export default function Checkout() {
             address: profileData.address ?? '',
           });
           
-          // Check if saved address matches any predefined location
-          const matchedLocation = DELIVERY_LOCATIONS.find(
-            loc => profileData.address?.includes(loc.name) || profileData.address === loc.id
-          );
-          if (matchedLocation) {
-            setSelectedLocation(matchedLocation.id);
+          // Check if saved address matches any delivery location
+          if (profileData.address && deliveryLocations.length > 0) {
+            const matchedLocation = deliveryLocations.find(
+              loc => profileData.address?.includes(loc.name)
+            );
+            if (matchedLocation) {
+              setSelectedLocation(matchedLocation.id);
+            }
           }
         }
       } catch (err) {
@@ -101,16 +133,25 @@ export default function Checkout() {
       }
     };
 
-    fetchProfile();
-  }, [user]);
+    if (deliveryLocations.length > 0) {
+      fetchProfile();
+    }
+  }, [user, deliveryLocations]);
 
   /* =======================
      CALCULATIONS
      ======================= */
-  const deliveryCharge = useMemo(
-    () => (totalPrice >= 99 ? 0 : 40),
-    [totalPrice]
-  );
+  // Get delivery charge from selected location or default
+  const deliveryCharge = useMemo(() => {
+    if (totalPrice >= 99) return 0;
+    
+    const selected = deliveryLocations.find(loc => loc.id === selectedLocation);
+    if (selected && selected.delivery_fee > 0) {
+      return selected.delivery_fee;
+    }
+    
+    return 40; // Default delivery charge
+  }, [totalPrice, selectedLocation, deliveryLocations]);
 
   const finalTotal = useMemo(
     () => totalPrice + deliveryCharge,
@@ -148,7 +189,7 @@ export default function Checkout() {
   /* =======================
      AUTH LOADING STATE
      ======================= */
-  if (authLoading) {
+  if (authLoading || locationsLoading) {
     return (
       <div className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-2xl mx-auto px-4 text-center">
@@ -157,7 +198,7 @@ export default function Checkout() {
             Loading...
           </h1>
           <p className="text-gray-600 mb-6">
-            Checking your authentication status
+            {locationsLoading ? 'Loading delivery locations' : 'Checking your authentication status'}
           </p>
         </div>
       </div>
@@ -204,7 +245,7 @@ export default function Checkout() {
      ======================= */
   const handleLocationSelect = (locationId: string) => {
     setSelectedLocation(locationId);
-    const location = DELIVERY_LOCATIONS.find(loc => loc.id === locationId);
+    const location = deliveryLocations.find(loc => loc.id === locationId);
     if (location) {
       setProfile(prev => ({
         ...prev,
@@ -214,7 +255,7 @@ export default function Checkout() {
   };
 
   /* =======================
-     PLACE ORDER - FIXED VERSION
+     PLACE ORDER
      ======================= */
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -274,14 +315,14 @@ export default function Checkout() {
 
       console.log('Profile updated successfully');
 
-      /* 2️⃣ CREATE ORDER - Don't include delivery_location field */
+      /* 2️⃣ CREATE ORDER */
       const { data: order, error: orderError } = await (supabase as any)
         .from('orders')
         .insert({
           user_id: user.id,
           total_amount: finalTotal,
           status: 'pending',
-          // No delivery_location field - it will be stored in profiles.address
+          delivery_location_id: selectedLocation,
         })
         .select()
         .single();
@@ -368,6 +409,8 @@ export default function Checkout() {
      SUCCESS SCREEN
      ======================= */
   if (orderPlaced) {
+    const selectedLocationDetails = deliveryLocations.find(loc => loc.id === selectedLocation);
+    
     return (
       <div className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-2xl mx-auto px-4 text-center">
@@ -395,6 +438,14 @@ export default function Checkout() {
               <p className="text-gray-700">
                 <span className="font-medium">Delivery Point:</span> {profile.address}
               </p>
+              {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 && (
+                <p className="text-gray-700">
+                  <span className="font-medium">Delivery Fee:</span> 
+                  <span className="text-green-600 font-semibold ml-2">
+                    ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                  </span>
+                </p>
+              )}
             </div>
           </div>
 
@@ -420,6 +471,8 @@ export default function Checkout() {
   /* =======================
      CHECKOUT UI
      ======================= */
+  const selectedLocationDetails = deliveryLocations.find(loc => loc.id === selectedLocation);
+
   return (
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-6xl mx-auto px-4">
@@ -503,62 +556,95 @@ export default function Checkout() {
                   <label className="block text-sm font-medium text-gray-700 mb-3">
                     Select Delivery Point *
                   </label>
-                  <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
-                    {DELIVERY_LOCATIONS.map(location => (
-                      <div
-                        key={location.id}
-                        className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
-                          selectedLocation === location.id
-                            ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                        }`}
-                        onClick={() => handleLocationSelect(location.id)}
-                      >
-                        <div className="flex items-center h-5">
-                          <input
-                            type="radio"
-                            name="delivery-location"
-                            checked={selectedLocation === location.id}
-                            onChange={() => handleLocationSelect(location.id)}
-                            className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
-                          />
-                        </div>
-                        <div className="ml-3 flex-1">
-                          <label className="block text-sm font-medium text-gray-800">
-                            {location.name}
-                          </label>
-                          <p className="text-sm text-gray-500 mt-1">
-                            {location.description}
-                          </p>
-                          {selectedLocation === location.id && (
-                            <div className="mt-2 flex items-center text-green-600 text-sm">
-                              <CheckCircle className="h-4 w-4 mr-1" />
-                              <span>Selected for delivery</span>
-                            </div>
-                          )}
-                        </div>
-                        <div className={`h-3 w-3 rounded-full ml-2 ${
-                          selectedLocation === location.id 
-                            ? 'bg-green-500' 
-                            : 'bg-gray-300'
-                        }`} />
-                      </div>
-                    ))}
-                  </div>
                   
-                  {/* Selected Location Display */}
-                  {selectedLocation && (
-                    <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <p className="text-sm text-green-800 font-medium">
-                        Selected Delivery Point:
-                      </p>
-                      <p className="text-green-900">
-                        {DELIVERY_LOCATIONS.find(loc => loc.id === selectedLocation)?.name}
-                      </p>
-                      <p className="text-sm text-green-700 mt-1">
-                        {DELIVERY_LOCATIONS.find(loc => loc.id === selectedLocation)?.description}
-                      </p>
+                  {deliveryLocations.length === 0 ? (
+                    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                      <p className="text-gray-600">No delivery locations available. Please contact support.</p>
                     </div>
+                  ) : (
+                    <>
+                      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
+                        {deliveryLocations.map(location => (
+                          <div
+                            key={location.id}
+                            className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
+                              selectedLocation === location.id
+                                ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
+                                : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                            }`}
+                            onClick={() => handleLocationSelect(location.id)}
+                          >
+                            <div className="flex items-center h-5">
+                              <input
+                                type="radio"
+                                name="delivery-location"
+                                checked={selectedLocation === location.id}
+                                onChange={() => handleLocationSelect(location.id)}
+                                className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
+                              />
+                            </div>
+                            <div className="ml-3 flex-1">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-800">
+                                    {location.name}
+                                  </label>
+                                  <p className="text-sm text-gray-500 mt-1">
+                                    {location.description}
+                                  </p>
+                                </div>
+                                {location.delivery_fee > 0 && (
+                                  <div className="text-sm font-semibold text-gray-700">
+                                    ₹{location.delivery_fee.toFixed(2)}
+                                  </div>
+                                )}
+                              </div>
+                              {selectedLocation === location.id && (
+                                <div className="mt-2 flex items-center text-green-600 text-sm">
+                                  <CheckCircle className="h-4 w-4 mr-1" />
+                                  <span>Selected for delivery</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className={`h-3 w-3 rounded-full ml-2 ${
+                              selectedLocation === location.id 
+                                ? 'bg-green-500' 
+                                : 'bg-gray-300'
+                            }`} />
+                          </div>
+                        ))}
+                      </div>
+                      
+                      {/* Selected Location Display */}
+                      {selectedLocationDetails && (
+                        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            <MapPin className="h-5 w-5 text-green-600" />
+                            <p className="text-sm text-green-800 font-medium">
+                              Selected Delivery Point:
+                            </p>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <p className="text-green-900 font-semibold">
+                                {selectedLocationDetails.name}
+                              </p>
+                              <p className="text-sm text-green-700 mt-1">
+                                {selectedLocationDetails.description}
+                              </p>
+                            </div>
+                            {selectedLocationDetails.delivery_fee > 0 && (
+                              <div className="text-right">
+                                <p className="text-sm text-gray-600">Delivery Fee</p>
+                                <p className="text-lg font-bold text-green-600">
+                                  ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                   
                   <p className="text-xs text-gray-500 mt-3">
@@ -570,7 +656,7 @@ export default function Checkout() {
 
               <button
                 type="submit"
-                disabled={loading || !selectedLocation}
+                disabled={loading || !selectedLocation || deliveryLocations.length === 0}
                 className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg"
               >
                 {loading ? 'Processing Order...' : 'Place Order'}

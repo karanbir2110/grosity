@@ -1,6 +1,6 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, User, CheckCircle, MapPin, Sparkles } from 'lucide-react';
+import { Save, User, CheckCircle, MapPin, Sparkles, Loader } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 
@@ -11,17 +11,14 @@ interface Profile {
   address?: string;
 }
 
-// Predefined delivery locations (same as in Checkout.tsx)
-const DELIVERY_LOCATIONS = [
-  { id: 'hostel_a', name: 'Hostel A', description: 'Main Block' },
-  { id: 'hostel_b', name: 'Hostel B', description: 'Near Sports Complex' },
-  { id: 'hostel_c', name: 'Hostel C', description: 'New Building' },
-  { id: 'hostel_d', name: 'Hostel D', description: 'International Hostel' },
-  { id: 'library', name: 'Central Library', description: 'Main Campus' },
-  { id: 'cafeteria', name: 'Main Cafeteria', description: 'Food Court Area' },
-  { id: 'admin_block', name: 'Administration Block', description: 'Reception Desk' },
-  { id: 'sports_complex', name: 'Sports Complex', description: 'Entrance Gate' },
-];
+interface DeliveryLocation {
+  id: string;
+  name: string;
+  description: string;
+  delivery_fee: number;
+  is_active: boolean;
+  order_index: number;
+}
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -31,6 +28,8 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [saveAnimation, setSaveAnimation] = useState(false);
+  const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(true);
 
   const [formData, setFormData] = useState({
     full_name: '',
@@ -40,6 +39,37 @@ export default function Profile() {
 
   // Track selected delivery location
   const [selectedLocation, setSelectedLocation] = useState<string>('');
+
+  /* =====================
+     FETCH DELIVERY LOCATIONS
+     ===================== */
+  useEffect(() => {
+    const fetchDeliveryLocations = async () => {
+      try {
+        setLocationsLoading(true);
+        const { data, error } = await supabase
+          .from('delivery_locations')
+          .select('*')
+          .eq('is_active', true)
+          .order('order_index');
+
+        if (error) {
+          console.error('Error fetching delivery locations:', error);
+          return;
+        }
+
+        if (data) {
+          setDeliveryLocations(data as DeliveryLocation[]);
+        }
+      } catch (err) {
+        console.error('Error in fetchDeliveryLocations:', err);
+      } finally {
+        setLocationsLoading(false);
+      }
+    };
+
+    fetchDeliveryLocations();
+  }, []);
 
   /* =====================
      AUTH CHECK
@@ -76,10 +106,10 @@ export default function Profile() {
             address: data.address || '',
           });
 
-          // Check if saved address matches any predefined location
-          if (data.address) {
-            const matchedLocation = DELIVERY_LOCATIONS.find(
-              loc => data.address?.includes(loc.name) || data.address === loc.id
+          // Check if saved address matches any delivery location
+          if (data.address && deliveryLocations.length > 0) {
+            const matchedLocation = deliveryLocations.find(
+              loc => data.address?.includes(loc.name)
             );
             if (matchedLocation) {
               setSelectedLocation(matchedLocation.id);
@@ -93,15 +123,17 @@ export default function Profile() {
       }
     };
 
-    fetchProfile();
-  }, [user]);
+    if (deliveryLocations.length > 0) {
+      fetchProfile();
+    }
+  }, [user, deliveryLocations]);
 
   /* =====================
      HANDLE LOCATION SELECTION
      ===================== */
   const handleLocationSelect = (locationId: string) => {
     setSelectedLocation(locationId);
-    const location = DELIVERY_LOCATIONS.find(loc => loc.id === locationId);
+    const location = deliveryLocations.find(loc => loc.id === locationId);
     if (location) {
       setFormData(prev => ({
         ...prev,
@@ -167,17 +199,22 @@ export default function Profile() {
     }
   };
 
-  if (authLoading || loading) {
+  if (authLoading || loading || locationsLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">Loading profile...</p>
+        <div className="text-center">
+          <Loader className="h-8 w-8 animate-spin text-green-600 mx-auto mb-4" />
+          <p className="text-gray-600">
+            {locationsLoading ? 'Loading delivery locations...' : 'Loading profile...'}
+          </p>
+        </div>
       </div>
     );
   }
 
   // Get selected location details
   const selectedLocationDetails = selectedLocation 
-    ? DELIVERY_LOCATIONS.find(loc => loc.id === selectedLocation)
+    ? deliveryLocations.find(loc => loc.id === selectedLocation)
     : null;
 
   return (
@@ -201,6 +238,10 @@ export default function Profile() {
           
           .animate-shimmer {
             animation: shimmer 1.5s infinite;
+          }
+          
+          .scale-102 {
+            transform: scale(1.02);
           }
         `}
       </style>
@@ -242,6 +283,11 @@ export default function Profile() {
                       <span className="font-medium">Delivery Point:</span>{' '}
                       {selectedLocationDetails.name}
                     </div>
+                    {selectedLocationDetails.delivery_fee > 0 && (
+                      <div className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                        ₹{selectedLocationDetails.delivery_fee.toFixed(2)} fee
+                      </div>
+                    )}
                     {saveAnimation && (
                       <Sparkles className="h-4 w-4 text-yellow-500 animate-pulse" />
                     )}
@@ -260,6 +306,11 @@ export default function Profile() {
                       <p className="font-medium text-sm">Selected Delivery Point</p>
                       <p className="text-green-900 font-semibold">{selectedLocationDetails.name}</p>
                       <p className="text-xs text-green-600 mt-1">{selectedLocationDetails.description}</p>
+                      {selectedLocationDetails.delivery_fee > 0 && (
+                        <p className="text-xs font-semibold text-green-800 mt-1">
+                          Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                        </p>
+                      )}
                     </div>
                     <CheckCircle className="h-5 w-5 text-green-600" />
                     {saveAnimation && (
@@ -366,6 +417,11 @@ export default function Profile() {
                       }`}>
                         {selectedLocationDetails.name}
                       </span>
+                      {selectedLocationDetails.delivery_fee > 0 && (
+                        <span className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded">
+                          ₹{selectedLocationDetails.delivery_fee.toFixed(2)} fee
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -391,45 +447,68 @@ export default function Profile() {
                           </h3>
                           <p className="text-green-700">{selectedLocationDetails.description}</p>
                         </div>
-                        <div className={`bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium transition-all duration-300 ${
-                          saveAnimation ? 'bg-green-200 scale-110' : ''
-                        }`}>
-                          {saveAnimation ? 'Saved!' : 'Active'}
+                        <div className="text-right">
+                          <div className={`bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium transition-all duration-300 ${
+                            saveAnimation ? 'bg-green-200 scale-110' : ''
+                          }`}>
+                            {saveAnimation ? 'Saved!' : 'Active'}
+                          </div>
+                          {selectedLocationDetails.delivery_fee > 0 && (
+                            <p className="text-sm font-semibold text-green-800 mt-2">
+                              Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
                   )}
 
                   {/* Location Options Grid */}
-                  <div className="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
-                    {DELIVERY_LOCATIONS.map(location => (
-                      <div
-                        key={location.id}
-                        className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
-                          selectedLocation === location.id
-                            ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                        } ${
-                          saveAnimation && selectedLocation === location.id ? 'animate-pulse' : ''
-                        }`}
-                        onClick={() => handleLocationSelect(location.id)}
-                      >
-                        <div className="flex items-center h-5">
-                          <input
-                            type="radio"
-                            name="delivery-location"
-                            checked={selectedLocation === location.id}
-                            onChange={() => handleLocationSelect(location.id)}
-                            className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
-                          />
-                        </div>
-                        <div className="ml-3 flex-1">
-                          <div className="flex items-center justify-between">
-                            <label className="block text-sm font-medium text-gray-800">
-                              {location.name}
-                            </label>
+                  {deliveryLocations.length === 0 ? (
+                    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 text-center">
+                      <MapPin className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                      <p className="text-gray-600">No delivery locations available.</p>
+                      <p className="text-sm text-gray-500 mt-1">Please contact support.</p>
+                    </div>
+                  ) : (
+                    <div className="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+                      {deliveryLocations.map(location => (
+                        <div
+                          key={location.id}
+                          className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
+                            selectedLocation === location.id
+                              ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
+                              : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                          } ${
+                            saveAnimation && selectedLocation === location.id ? 'animate-pulse' : ''
+                          }`}
+                          onClick={() => handleLocationSelect(location.id)}
+                        >
+                          <div className="flex items-center h-5">
+                            <input
+                              type="radio"
+                              name="delivery-location"
+                              checked={selectedLocation === location.id}
+                              onChange={() => handleLocationSelect(location.id)}
+                              className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
+                            />
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-sm font-medium text-gray-800">
+                                {location.name}
+                              </label>
+                              {location.delivery_fee > 0 && (
+                                <span className="text-sm font-semibold text-gray-700">
+                                  ₹{location.delivery_fee.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-500 mt-1">
+                              {location.description}
+                            </p>
                             {selectedLocation === location.id && (
-                              <div className="flex items-center text-green-600 text-xs">
+                              <div className="flex items-center text-green-600 text-xs mt-2">
                                 <CheckCircle className="h-3 w-3 mr-1" />
                                 <span>Selected</span>
                                 {saveAnimation && (
@@ -438,13 +517,10 @@ export default function Profile() {
                               </div>
                             )}
                           </div>
-                          <p className="text-sm text-gray-500 mt-1">
-                            {location.description}
-                          </p>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Information Note */}
                   <div className="mt-6 p-3 bg-gray-50 border border-gray-200 rounded-lg">
@@ -462,7 +538,7 @@ export default function Profile() {
                   <div>
                     <button
                       type="submit"
-                      disabled={saving || !selectedLocation}
+                      disabled={saving || !selectedLocation || deliveryLocations.length === 0}
                       className={`bg-green-600 text-white px-8 py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-all duration-300 text-lg flex items-center gap-3 relative overflow-hidden ${
                         saveAnimation ? 'animate-pulse' : ''
                       }`}
@@ -478,9 +554,14 @@ export default function Profile() {
                       {saving ? 'Saving...' : saveAnimation ? 'Saved!' : 'Save Profile'}
                     </button>
                     
-                    {!selectedLocation && (
+                    {!selectedLocation && deliveryLocations.length > 0 && (
                       <p className="mt-2 text-sm text-red-600">
                         * Please select a delivery location to save your profile
+                      </p>
+                    )}
+                    {deliveryLocations.length === 0 && (
+                      <p className="mt-2 text-sm text-red-600">
+                        * No delivery locations available. Cannot save profile.
                       </p>
                     )}
                   </div>
@@ -494,6 +575,11 @@ export default function Profile() {
                       }`}>
                         {selectedLocationDetails.name}
                       </p>
+                      {selectedLocationDetails.delivery_fee > 0 && (
+                        <p className="text-sm text-green-700 mt-1">
+                          Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                        </p>
+                      )}
                       {saveAnimation && (
                         <p className="text-xs text-green-500 mt-1 animate-fadeIn">
                           ✓ Preference saved
