@@ -62,26 +62,42 @@ export default function Checkout() {
     const fetchProfile = async () => {
       if (!user) return;
 
-      const { data } = await (supabase as any)
-        .from('profiles')
-        .select('full_name, mobile, address')
-        .eq('id', user.id)
-        .single();
+      try {
+        // Use a more specific query with type assertion
+        const { data, error } = await (supabase as any)
+          .from('profiles')
+          .select('full_name, mobile, address')
+          .eq('id', user.id)
+          .single();
 
-      if (data) {
-        setProfile({
-          full_name: data.full_name ?? '',
-          mobile: data.mobile ?? '',
-          address: data.address ?? '',
-        });
-        
-        // Check if saved address matches any predefined location
-        const matchedLocation = DELIVERY_LOCATIONS.find(
-          loc => data.address?.includes(loc.name) || data.address === loc.id
-        );
-        if (matchedLocation) {
-          setSelectedLocation(matchedLocation.id);
+        if (error) {
+          console.error('Error fetching profile:', error);
+          return;
         }
+
+        if (data) {
+          const profileData = data as { 
+            full_name?: string | null; 
+            mobile?: string | null; 
+            address?: string | null;
+          };
+          
+          setProfile({
+            full_name: profileData.full_name ?? '',
+            mobile: profileData.mobile ?? '',
+            address: profileData.address ?? '',
+          });
+          
+          // Check if saved address matches any predefined location
+          const matchedLocation = DELIVERY_LOCATIONS.find(
+            loc => profileData.address?.includes(loc.name) || profileData.address === loc.id
+          );
+          if (matchedLocation) {
+            setSelectedLocation(matchedLocation.id);
+          }
+        }
+      } catch (err) {
+        console.error('Error in fetchProfile:', err);
       }
     };
 
@@ -198,7 +214,7 @@ export default function Checkout() {
   };
 
   /* =======================
-     PLACE ORDER
+     PLACE ORDER - FIXED VERSION
      ======================= */
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -237,7 +253,11 @@ export default function Checkout() {
     setLoading(true);
 
     try {
-      /* 1️⃣ UPDATE PROFILE */
+      console.log('Starting order process...');
+      console.log('Selected location:', selectedLocation);
+      console.log('Profile address:', profile.address);
+
+      /* 1️⃣ UPDATE PROFILE - Store delivery location in address column */
       const { error: profileError } = await (supabase as any)
         .from('profiles')
         .update({
@@ -247,45 +267,64 @@ export default function Checkout() {
         })
         .eq('id', user.id);
 
-      if (profileError) throw profileError;
+      if (profileError) {
+        console.error('Profile update error:', profileError);
+        throw profileError;
+      }
 
-      /* 2️⃣ CREATE ORDER */
+      console.log('Profile updated successfully');
+
+      /* 2️⃣ CREATE ORDER - Don't include delivery_location field */
       const { data: order, error: orderError } = await (supabase as any)
         .from('orders')
         .insert({
           user_id: user.id,
           total_amount: finalTotal,
           status: 'pending',
-          delivery_location: selectedLocation,
+          // No delivery_location field - it will be stored in profiles.address
         })
-        .select('id')
+        .select()
         .single();
 
-      if (orderError) throw orderError;
+      if (orderError) {
+        console.error('Order creation error:', orderError);
+        throw orderError;
+      }
+
+      if (!order) {
+        throw new Error('Order creation failed - no order returned');
+      }
+
+      const orderData = order as { id: string };
+
+      console.log('Order created:', orderData.id);
 
       /* 3️⃣ CREATE ORDER ITEMS */
       const orderItems = items.map(item => ({
-        order_id: order.id,
+        order_id: orderData.id,
         product_id: item.product.id,
         product_name: item.product.name,
         quantity: item.quantity,
-        price:
-          item.product.price *
-          (1 - item.product.discount_percentage / 100),
+        price: item.product.price * (1 - item.product.discount_percentage / 100),
       }));
 
       const { error: orderItemsError } = await (supabase as any)
         .from('order_items')
         .insert(orderItems);
 
-      if (orderItemsError) throw orderItemsError;
+      if (orderItemsError) {
+        console.error('Order items error:', orderItemsError);
+        throw orderItemsError;
+      }
+
+      console.log('Order items created');
 
       /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
       const updateStockPromises = items.map(item => 
         (supabase as any)
           .from('products')
           .update({
-            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
+            stock_quantity: (item.product.stock_quantity || 0) - item.quantity,
           })
           .eq('id', item.product.id)
       );
@@ -295,13 +334,31 @@ export default function Checkout() {
       const stockUpdateErrors = updateResults.filter(result => result.error);
       if (stockUpdateErrors.length > 0) {
         console.error('Stock update errors:', stockUpdateErrors);
+        // Don't throw here, just log - the order is already placed
       }
+
+      console.log('Stock updated');
 
       clearCart();
       setOrderPlaced(true);
-    } catch (err) {
-      console.error(err);
-      alert('Something went wrong. Try again.');
+      
+    } catch (err: any) {
+      console.error('Order placement error:', err);
+      
+      // Provide more specific error messages
+      if (err.message?.includes('delivery_location')) {
+        alert('Database schema issue. The delivery location will be stored in your profile address.');
+      } else if (err.code === '23505') {
+        alert('Duplicate order detected. Please try again.');
+      } else if (err.code === '23503') {
+        alert('Database constraint error. Please contact support.');
+      } else if (err.message?.includes('network')) {
+        alert('Network error. Please check your connection and try again.');
+      } else if (err.message?.includes('JWT')) {
+        alert('Session expired. Please login again.');
+      } else {
+        alert(`Something went wrong: ${err.message || 'Unknown error'}`);
+      }
     } finally {
       setLoading(false);
     }
