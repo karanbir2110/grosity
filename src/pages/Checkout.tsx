@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag, Lock, MapPin } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -11,79 +11,19 @@ interface ProfileForm {
   address: string;
 }
 
-interface DeliveryLocation {
-  id: string;
-  name: string;
-  description: string;
-  delivery_fee: number;
-  is_active: boolean;
-  order_index: number;
-}
-
 export default function Checkout() {
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const { items, totalPrice, clearCart } = useCart();
 
   const [loading, setLoading] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
-  const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
-  const [locationsLoading, setLocationsLoading] = useState(true);
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
     mobile: '',
     address: '',
   });
-
-  // Track selected delivery location
-  const [selectedLocation, setSelectedLocation] = useState<string>('');
-
-  /* =======================
-     FETCH DELIVERY LOCATIONS
-     ======================= */
-  useEffect(() => {
-    const fetchDeliveryLocations = async () => {
-      try {
-        setLocationsLoading(true);
-        const { data, error } = await supabase
-          .from('delivery_locations')
-          .select('*')
-          .eq('is_active', true)
-          .order('order_index');
-
-        if (error) {
-          console.error('Error fetching delivery locations:', error);
-          return;
-        }
-
-        if (data) {
-          setDeliveryLocations(data as DeliveryLocation[]);
-        }
-      } catch (err) {
-        console.error('Error in fetchDeliveryLocations:', err);
-      } finally {
-        setLocationsLoading(false);
-      }
-    };
-
-    fetchDeliveryLocations();
-  }, []);
-
-  /* =======================
-     AUTH CHECK REDIRECT
-     ======================= */
-  useEffect(() => {
-    if (!authLoading && !user) {
-      // Redirect to login if not authenticated
-      navigate('/login', { 
-        state: { 
-          from: '/checkout',
-          message: 'Please login to complete your purchase'
-        } 
-      });
-    }
-  }, [user, authLoading, navigate]);
 
   /* =======================
      FETCH PROFILE
@@ -92,66 +32,31 @@ export default function Checkout() {
     const fetchProfile = async () => {
       if (!user) return;
 
-      try {
-        // Use a more specific query with type assertion
-        const { data, error } = await (supabase as any)
-          .from('profiles')
-          .select('full_name, mobile, address')
-          .eq('id', user.id)
-          .single();
+      const { data } = await (supabase as any)
+        .from('profiles')
+        .select('full_name, mobile, address')
+        .eq('id', user.id)
+        .single();
 
-        if (error) {
-          console.error('Error fetching profile:', error);
-          return;
-        }
-
-        if (data) {
-          const profileData = data as { 
-            full_name?: string | null; 
-            mobile?: string | null; 
-            address?: string | null;
-          };
-          
-          setProfile({
-            full_name: profileData.full_name ?? '',
-            mobile: profileData.mobile ?? '',
-            address: profileData.address ?? '',
-          });
-          
-          // Check if saved address matches any delivery location
-          if (profileData.address && deliveryLocations.length > 0) {
-            const matchedLocation = deliveryLocations.find(
-              loc => profileData.address?.includes(loc.name)
-            );
-            if (matchedLocation) {
-              setSelectedLocation(matchedLocation.id);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error in fetchProfile:', err);
+      if (data) {
+        setProfile({
+          full_name: data.full_name ?? '',
+          mobile: data.mobile ?? '',
+          address: data.address ?? '',
+        });
       }
     };
 
-    if (deliveryLocations.length > 0) {
-      fetchProfile();
-    }
-  }, [user, deliveryLocations]);
+    fetchProfile();
+  }, [user]);
 
   /* =======================
      CALCULATIONS
      ======================= */
-  // Get delivery charge from selected location or default
-  const deliveryCharge = useMemo(() => {
-    if (totalPrice >= 99) return 0;
-    
-    const selected = deliveryLocations.find(loc => loc.id === selectedLocation);
-    if (selected && selected.delivery_fee > 0) {
-      return selected.delivery_fee;
-    }
-    
-    return 40; // Default delivery charge
-  }, [totalPrice, selectedLocation, deliveryLocations]);
+  const deliveryCharge = useMemo(
+    () => (totalPrice >= 99 ? 0 : 40),
+    [totalPrice]
+  );
 
   const finalTotal = useMemo(
     () => totalPrice + deliveryCharge,
@@ -187,74 +92,6 @@ export default function Checkout() {
   }
 
   /* =======================
-     AUTH LOADING STATE
-     ======================= */
-  if (authLoading || locationsLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-2xl mx-auto px-4 text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-green-600 mx-auto mb-6"></div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">
-            Loading...
-          </h1>
-          <p className="text-gray-600 mb-6">
-            {locationsLoading ? 'Loading delivery locations' : 'Checking your authentication status'}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  /* =======================
-     NOT LOGGED IN STATE
-     ======================= */
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-2xl mx-auto px-4 text-center">
-          <Lock className="h-24 w-24 text-gray-300 mx-auto mb-6" />
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">
-            Authentication Required
-          </h1>
-          <p className="text-gray-600 mb-6">
-            You need to be logged in to complete your purchase.
-          </p>
-          <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <button
-              onClick={() => navigate('/login', { 
-                state: { from: '/checkout' } 
-              })}
-              className="bg-green-600 text-white px-8 py-3 rounded-lg hover:bg-green-700 font-semibold transition-colors"
-            >
-              Login to Continue
-            </button>
-            <button
-              onClick={() => navigate('/shop')}
-              className="bg-white text-green-600 px-8 py-3 rounded-lg border-2 border-green-600 font-semibold hover:bg-green-50 transition-colors"
-            >
-              Continue Shopping
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* =======================
-     HANDLE LOCATION SELECTION
-     ======================= */
-  const handleLocationSelect = (locationId: string) => {
-    setSelectedLocation(locationId);
-    const location = deliveryLocations.find(loc => loc.id === locationId);
-    if (location) {
-      setProfile(prev => ({
-        ...prev,
-        address: `${location.name} - ${location.description}`
-      }));
-    }
-  };
-
-  /* =======================
      PLACE ORDER
      ======================= */
   const handleSubmit = async (e: FormEvent) => {
@@ -267,11 +104,6 @@ export default function Checkout() {
 
     if (!profile.full_name || !profile.mobile || !profile.address) {
       alert('Please fill all details');
-      return;
-    }
-
-    if (!selectedLocation) {
-      alert('Please select a delivery location');
       return;
     }
 
@@ -294,11 +126,7 @@ export default function Checkout() {
     setLoading(true);
 
     try {
-      console.log('Starting order process...');
-      console.log('Selected location:', selectedLocation);
-      console.log('Profile address:', profile.address);
-
-      /* 1️⃣ UPDATE PROFILE - Store delivery location in address column */
+      /* 1️⃣ UPDATE PROFILE */
       const { error: profileError } = await (supabase as any)
         .from('profiles')
         .update({
@@ -308,12 +136,7 @@ export default function Checkout() {
         })
         .eq('id', user.id);
 
-      if (profileError) {
-        console.error('Profile update error:', profileError);
-        throw profileError;
-      }
-
-      console.log('Profile updated successfully');
+      if (profileError) throw profileError;
 
       /* 2️⃣ CREATE ORDER */
       const { data: order, error: orderError } = await (supabase as any)
@@ -322,84 +145,56 @@ export default function Checkout() {
           user_id: user.id,
           total_amount: finalTotal,
           status: 'pending',
-          delivery_location_id: selectedLocation,
         })
-        .select()
+        .select('id')
         .single();
 
-      if (orderError) {
-        console.error('Order creation error:', orderError);
-        throw orderError;
-      }
-
-      if (!order) {
-        throw new Error('Order creation failed - no order returned');
-      }
-
-      const orderData = order as { id: string };
-
-      console.log('Order created:', orderData.id);
+      if (orderError) throw orderError;
 
       /* 3️⃣ CREATE ORDER ITEMS */
       const orderItems = items.map(item => ({
-        order_id: orderData.id,
+        order_id: order.id,
         product_id: item.product.id,
         product_name: item.product.name,
         quantity: item.quantity,
-        price: item.product.price * (1 - item.product.discount_percentage / 100),
+        price:
+          item.product.price *
+          (1 - item.product.discount_percentage / 100),
       }));
 
       const { error: orderItemsError } = await (supabase as any)
         .from('order_items')
         .insert(orderItems);
 
-      if (orderItemsError) {
-        console.error('Order items error:', orderItemsError);
-        throw orderItemsError;
-      }
-
-      console.log('Order items created');
+      if (orderItemsError) throw orderItemsError;
 
       /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
+      // Create an array of update promises for each product
       const updateStockPromises = items.map(item => 
         (supabase as any)
           .from('products')
           .update({
-            stock_quantity: (item.product.stock_quantity || 0) - item.quantity,
+            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
           })
           .eq('id', item.product.id)
       );
 
+      // Execute all stock updates
       const updateResults = await Promise.all(updateStockPromises);
       
+      // Check for any errors in stock updates
       const stockUpdateErrors = updateResults.filter(result => result.error);
       if (stockUpdateErrors.length > 0) {
         console.error('Stock update errors:', stockUpdateErrors);
-        // Don't throw here, just log - the order is already placed
+        // Optional: You could rollback the order here if stock updates fail
+        // For now, we'll just log it but continue with the order
       }
-
-      console.log('Stock updated');
 
       clearCart();
       setOrderPlaced(true);
-      
-    } catch (err: any) {
-      console.error('Order placement error:', err);
-      
-      // Provide more specific error messages
-      if (err.message?.includes('delivery_location')) {
-        alert('Database schema issue. The delivery location will be stored in your profile address.');
-      } else if (err.code === '23505') {
-        alert('Duplicate order detected. Please try again.');
-      } else if (err.code === '23503') {
-        alert('Database constraint error. Please contact support.');
-      } else if (err.message?.includes('network')) {
-        alert('Network error. Please check your connection and try again.');
-      } else if (err.message?.includes('JWT')) {
-        alert('Session expired. Please login again.');
-      } else {
-        alert(`Something went wrong: ${err.message || 'Unknown error'}`);
-      }
+    } catch (err) {
+      console.error(err);
+      alert('Something went wrong. Try again.');
     } finally {
       setLoading(false);
     }
@@ -409,8 +204,6 @@ export default function Checkout() {
      SUCCESS SCREEN
      ======================= */
   if (orderPlaced) {
-    const selectedLocationDetails = deliveryLocations.find(loc => loc.id === selectedLocation);
-    
     return (
       <div className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-2xl mx-auto px-4 text-center">
@@ -436,16 +229,8 @@ export default function Checkout() {
                 <span className="font-medium">Mobile:</span> {profile.mobile}
               </p>
               <p className="text-gray-700">
-                <span className="font-medium">Delivery Point:</span> {profile.address}
+                <span className="font-medium">Address:</span> {profile.address}
               </p>
-              {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 && (
-                <p className="text-gray-700">
-                  <span className="font-medium">Delivery Fee:</span> 
-                  <span className="text-green-600 font-semibold ml-2">
-                    ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
-                  </span>
-                </p>
-              )}
             </div>
           </div>
 
@@ -471,8 +256,6 @@ export default function Checkout() {
   /* =======================
      CHECKOUT UI
      ======================= */
-  const selectedLocationDetails = deliveryLocations.find(loc => loc.id === selectedLocation);
-
   return (
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-6xl mx-auto px-4">
@@ -494,21 +277,6 @@ export default function Checkout() {
               onSubmit={handleSubmit}
               className="bg-white rounded-xl shadow-md p-6 md:p-8"
             >
-              {/* User Info Badge */}
-              <div className="mb-6 p-3 bg-green-50 border border-green-200 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 bg-green-100 rounded-full flex items-center justify-center">
-                    <span className="text-green-600 font-bold">
-                      {user?.email?.[0]?.toUpperCase()}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-sm text-green-800 font-medium">Logged in as</p>
-                    <p className="text-green-900">{user?.email}</p>
-                  </div>
-                </div>
-              </div>
-
               <h2 className="text-xl font-bold text-gray-800 mb-6">
                 Delivery Information
               </h2>
@@ -551,112 +319,27 @@ export default function Checkout() {
                   <p className="text-xs text-gray-500 mt-1">10-digit mobile number without country code</p>
                 </div>
 
-                {/* Delivery Location Selection */}
+                {/* Address Field */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-3">
-                    Select Delivery Point *
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Delivery Address *
                   </label>
-                  
-                  {deliveryLocations.length === 0 ? (
-                    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
-                      <p className="text-gray-600">No delivery locations available. Please contact support.</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2">
-                        {deliveryLocations.map(location => (
-                          <div
-                            key={location.id}
-                            className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
-                              selectedLocation === location.id
-                                ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
-                                : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                            }`}
-                            onClick={() => handleLocationSelect(location.id)}
-                          >
-                            <div className="flex items-center h-5">
-                              <input
-                                type="radio"
-                                name="delivery-location"
-                                checked={selectedLocation === location.id}
-                                onChange={() => handleLocationSelect(location.id)}
-                                className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
-                              />
-                            </div>
-                            <div className="ml-3 flex-1">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <label className="block text-sm font-medium text-gray-800">
-                                    {location.name}
-                                  </label>
-                                  <p className="text-sm text-gray-500 mt-1">
-                                    {location.description}
-                                  </p>
-                                </div>
-                                {location.delivery_fee > 0 && (
-                                  <div className="text-sm font-semibold text-gray-700">
-                                    ₹{location.delivery_fee.toFixed(2)}
-                                  </div>
-                                )}
-                              </div>
-                              {selectedLocation === location.id && (
-                                <div className="mt-2 flex items-center text-green-600 text-sm">
-                                  <CheckCircle className="h-4 w-4 mr-1" />
-                                  <span>Selected for delivery</span>
-                                </div>
-                              )}
-                            </div>
-                            <div className={`h-3 w-3 rounded-full ml-2 ${
-                              selectedLocation === location.id 
-                                ? 'bg-green-500' 
-                                : 'bg-gray-300'
-                            }`} />
-                          </div>
-                        ))}
-                      </div>
-                      
-                      {/* Selected Location Display */}
-                      {selectedLocationDetails && (
-                        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-                          <div className="flex items-center gap-2 mb-2">
-                            <MapPin className="h-5 w-5 text-green-600" />
-                            <p className="text-sm text-green-800 font-medium">
-                              Selected Delivery Point:
-                            </p>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <div>
-                              <p className="text-green-900 font-semibold">
-                                {selectedLocationDetails.name}
-                              </p>
-                              <p className="text-sm text-green-700 mt-1">
-                                {selectedLocationDetails.description}
-                              </p>
-                            </div>
-                            {selectedLocationDetails.delivery_fee > 0 && (
-                              <div className="text-right">
-                                <p className="text-sm text-gray-600">Delivery Fee</p>
-                                <p className="text-lg font-bold text-green-600">
-                                  ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  
-                  <p className="text-xs text-gray-500 mt-3">
-                    Note: We only deliver to these predefined points on campus. 
-                    Please collect your order from the selected location.
-                  </p>
+                  <textarea
+                    value={profile.address}
+                    onChange={e =>
+                      setProfile({ ...profile, address: e.target.value })
+                    }
+                    placeholder="House no., Building, Street, Area, City, State, Pincode"
+                    rows={4}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition resize-none"
+                    required
+                  />
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={loading || !selectedLocation || deliveryLocations.length === 0}
+                disabled={loading}
                 className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg"
               >
                 {loading ? 'Processing Order...' : 'Place Order'}
@@ -664,7 +347,7 @@ export default function Checkout() {
             </form>
           </div>
 
-          {/* RIGHT COLUMN - ORDER SUMMARY */}
+          {/* RIGHT COLUMN - ORDER SUMMARY (OPTIMIZED) */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl shadow-md p-6 sticky top-24">
               <h2 className="text-xl font-bold text-gray-800 mb-6">
