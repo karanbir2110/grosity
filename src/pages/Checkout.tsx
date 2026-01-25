@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, MapPin } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -11,6 +11,15 @@ interface ProfileForm {
   address: string;
 }
 
+interface DeliveryLocation {
+  id: string;
+  name: string;
+  description: string;
+  delivery_fee: number;
+  is_active: boolean;
+  order_index: number;
+}
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -18,12 +27,46 @@ export default function Checkout() {
 
   const [loading, setLoading] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(true);
+  const [selectedLocation, setSelectedLocation] = useState<string>('');
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
     mobile: '',
     address: '',
   });
+
+  /* =======================
+     FETCH DELIVERY LOCATIONS
+     ======================= */
+  useEffect(() => {
+    const fetchDeliveryLocations = async () => {
+      try {
+        setLocationsLoading(true);
+        const { data, error } = await (supabase as any)
+          .from('delivery_locations')
+          .select('*')
+          .eq('is_active', true)
+          .order('order_index');
+
+        if (error) {
+          console.error('Error fetching delivery locations:', error);
+          return;
+        }
+
+        if (data) {
+          setDeliveryLocations(data as DeliveryLocation[]);
+        }
+      } catch (err) {
+        console.error('Error in fetchDeliveryLocations:', err);
+      } finally {
+        setLocationsLoading(false);
+      }
+    };
+
+    fetchDeliveryLocations();
+  }, []);
 
   /* =======================
      FETCH PROFILE
@@ -44,19 +87,51 @@ export default function Checkout() {
           mobile: data.mobile ?? '',
           address: data.address ?? '',
         });
+
+        // Check if saved address matches any delivery location
+        if (data.address && deliveryLocations.length > 0) {
+          const matchedLocation = deliveryLocations.find(
+            loc => data.address?.includes(loc.name)
+          );
+          if (matchedLocation) {
+            setSelectedLocation(matchedLocation.id);
+          }
+        }
       }
     };
 
-    fetchProfile();
-  }, [user]);
+    if (deliveryLocations.length > 0) {
+      fetchProfile();
+    }
+  }, [user, deliveryLocations]);
+
+  /* =======================
+     HANDLE LOCATION SELECTION
+     ======================= */
+  const handleLocationSelect = (locationId: string) => {
+    setSelectedLocation(locationId);
+    const location = deliveryLocations.find(loc => loc.id === locationId);
+    if (location) {
+      setProfile(prev => ({
+        ...prev,
+        address: `${location.name} - ${location.description}`
+      }));
+    }
+  };
 
   /* =======================
      CALCULATIONS
      ======================= */
-  const deliveryCharge = useMemo(
-    () => (totalPrice >= 99 ? 0 : 40),
-    [totalPrice]
-  );
+  const selectedLocationDetails = selectedLocation 
+    ? deliveryLocations.find(loc => loc.id === selectedLocation)
+    : null;
+
+  const deliveryCharge = useMemo(() => {
+    if (selectedLocationDetails) {
+      return selectedLocationDetails.delivery_fee;
+    }
+    return totalPrice >= 99 ? 0 : 40; // Fallback
+  }, [totalPrice, selectedLocationDetails]);
 
   const finalTotal = useMemo(
     () => totalPrice + deliveryCharge,
@@ -102,8 +177,13 @@ export default function Checkout() {
       return;
     }
 
-    if (!profile.full_name || !profile.mobile || !profile.address) {
-      alert('Please fill all details');
+    if (!profile.full_name || !profile.mobile) {
+      alert('Please fill all personal details');
+      return;
+    }
+
+    if (!selectedLocation) {
+      alert('Please select a delivery location');
       return;
     }
 
@@ -126,7 +206,7 @@ export default function Checkout() {
     setLoading(true);
 
     try {
-      /* 1️⃣ UPDATE PROFILE */
+      /* 1️⃣ UPDATE PROFILE (with delivery location as address) */
       const { error: profileError } = await (supabase as any)
         .from('profiles')
         .update({
@@ -138,13 +218,14 @@ export default function Checkout() {
 
       if (profileError) throw profileError;
 
-      /* 2️⃣ CREATE ORDER */
+      /* 2️⃣ CREATE ORDER WITH DELIVERY LOCATION */
       const { data: order, error: orderError } = await (supabase as any)
         .from('orders')
         .insert({
           user_id: user.id,
           total_amount: finalTotal,
           status: 'pending',
+          delivery_location: profile.address, // SAVE DELIVERY LOCATION TO ORDERS TABLE
         })
         .select('id')
         .single();
@@ -169,7 +250,6 @@ export default function Checkout() {
       if (orderItemsError) throw orderItemsError;
 
       /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
-      // Create an array of update promises for each product
       const updateStockPromises = items.map(item => 
         (supabase as any)
           .from('products')
@@ -179,15 +259,11 @@ export default function Checkout() {
           .eq('id', item.product.id)
       );
 
-      // Execute all stock updates
       const updateResults = await Promise.all(updateStockPromises);
       
-      // Check for any errors in stock updates
       const stockUpdateErrors = updateResults.filter(result => result.error);
       if (stockUpdateErrors.length > 0) {
         console.error('Stock update errors:', stockUpdateErrors);
-        // Optional: You could rollback the order here if stock updates fail
-        // For now, we'll just log it but continue with the order
       }
 
       clearCart();
@@ -229,7 +305,13 @@ export default function Checkout() {
                 <span className="font-medium">Mobile:</span> {profile.mobile}
               </p>
               <p className="text-gray-700">
-                <span className="font-medium">Address:</span> {profile.address}
+                <span className="font-medium">Delivery Point:</span> {selectedLocationDetails?.name}
+              </p>
+              <p className="text-gray-700">
+                <span className="font-medium">Location:</span> {selectedLocationDetails?.description}
+              </p>
+              <p className="text-gray-700 text-sm mt-4 pt-4 border-t">
+                <span className="font-medium">Note:</span> Please collect your order from this location during the specified delivery hours.
               </p>
             </div>
           </div>
@@ -319,35 +401,136 @@ export default function Checkout() {
                   <p className="text-xs text-gray-500 mt-1">10-digit mobile number without country code</p>
                 </div>
 
-                {/* Address Field */}
+                {/* Delivery Location Section */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Delivery Address *
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Select Delivery Point *
                   </label>
-                  <textarea
-                    value={profile.address}
-                    onChange={e =>
-                      setProfile({ ...profile, address: e.target.value })
-                    }
-                    placeholder="House no., Building, Street, Area, City, State, Pincode"
-                    rows={4}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition resize-none"
-                    required
-                  />
+                  
+                  {locationsLoading ? (
+                    <div className="p-8 border border-gray-200 rounded-lg bg-gray-50 text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-3"></div>
+                      <p className="text-gray-600">Loading delivery locations...</p>
+                    </div>
+                  ) : deliveryLocations.length === 0 ? (
+                    <div className="p-6 border border-gray-200 rounded-lg bg-gray-50 text-center">
+                      <MapPin className="h-10 w-10 text-gray-400 mx-auto mb-3" />
+                      <p className="text-gray-600">No delivery locations available.</p>
+                      <p className="text-sm text-gray-500 mt-1">Please contact support.</p>
+                    </div>
+                  ) : (
+                    <div className="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+                      {deliveryLocations.map(location => (
+                        <div
+                          key={location.id}
+                          className={`relative flex items-start p-4 border rounded-lg cursor-pointer transition-all ${
+                            selectedLocation === location.id
+                              ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
+                              : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                          onClick={() => handleLocationSelect(location.id)}
+                        >
+                          <div className="flex items-center h-5">
+                            <input
+                              type="radio"
+                              name="delivery-location"
+                              checked={selectedLocation === location.id}
+                              onChange={() => handleLocationSelect(location.id)}
+                              className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
+                              required
+                            />
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-sm font-medium text-gray-800">
+                                {location.name}
+                              </label>
+                              {location.delivery_fee > 0 ? (
+                                <span className="text-sm font-semibold text-gray-700">
+                                  ₹{location.delivery_fee.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-sm font-semibold text-green-600">
+                                  FREE
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-500 mt-1">
+                              {location.description}
+                            </p>
+                            {selectedLocation === location.id && (
+                              <div className="flex items-center text-green-600 text-xs mt-2">
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                <span>Selected</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Information Note */}
+                  <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <p className="text-sm text-gray-600">
+                      <span className="font-medium">Note:</span> We only deliver to these predefined points. 
+                      Please select your preferred delivery location. You'll need to collect your order from this point.
+                    </p>
+                  </div>
+
+                  {/* Selected Location Preview */}
+                  {selectedLocationDetails && (
+                    <div className="mt-4 p-4 bg-green-50 border-2 border-green-200 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <MapPin className="h-4 w-4 text-green-600" />
+                        <p className="text-green-800 font-semibold">Selected Delivery Point</p>
+                      </div>
+                      <h3 className="text-lg font-bold text-green-900">
+                        {selectedLocationDetails.name}
+                      </h3>
+                      <p className="text-green-700">{selectedLocationDetails.description}</p>
+                      {selectedLocationDetails.delivery_fee > 0 && (
+                        <p className="text-sm font-semibold text-green-800 mt-2">
+                          Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                        </p>
+                      )}
+                      <p className="text-xs text-green-600 mt-2">
+                        This location will be saved with your order.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <button
                 type="submit"
-                disabled={loading}
-                className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg"
+                disabled={loading || !selectedLocation || deliveryLocations.length === 0}
+                className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg relative overflow-hidden group"
               >
-                {loading ? 'Processing Order...' : 'Place Order'}
+                {loading ? (
+                  <>
+                    <span className="opacity-0">Place Order</span>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    </div>
+                  </>
+                ) : (
+                  'Place Order'
+                )}
+                {!selectedLocation && deliveryLocations.length > 0 && (
+                  <span className="block text-sm font-normal mt-1 text-red-100">
+                    * Please select a delivery location
+                  </span>
+                )}
               </button>
+              
+              <p className="text-xs text-gray-500 text-center mt-4">
+                Your selected delivery point will be saved with your order for future reference.
+              </p>
             </form>
           </div>
 
-          {/* RIGHT COLUMN - ORDER SUMMARY (OPTIMIZED) */}
+          {/* RIGHT COLUMN - ORDER SUMMARY */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl shadow-md p-6 sticky top-24">
               <h2 className="text-xl font-bold text-gray-800 mb-6">
@@ -418,23 +601,50 @@ export default function Checkout() {
                   </span>
                 </div>
 
+                {/* Selected Location Info in Summary */}
+                {selectedLocationDetails && (
+                  <div className="pt-3 border-t">
+                    <div className="flex items-center gap-2 mb-2">
+                      <MapPin className="h-4 w-4 text-gray-400" />
+                      <span className="text-sm font-medium text-gray-700">Delivery Point:</span>
+                    </div>
+                    <p className="text-sm text-gray-600 font-medium">{selectedLocationDetails.name}</p>
+                    <p className="text-xs text-gray-500">{selectedLocationDetails.description}</p>
+                    {selectedLocationDetails.delivery_fee > 0 && (
+                      <p className="text-xs text-gray-600 mt-1">
+                        Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="border-t pt-3 mt-2">
                   <div className="flex justify-between font-bold text-lg">
                     <span>Total Amount</span>
                     <span className="text-green-600">₹{finalTotal.toFixed(2)}</span>
                   </div>
                   
-                  {deliveryCharge === 0 && totalPrice >= 99 && (
+                  {deliveryCharge === 0 && (
                     <div className="mt-2 p-2 bg-green-50 rounded-lg">
                       <p className="text-sm text-green-700 flex items-center">
                         <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.2 6.5 10.266a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
                         </svg>
-                        You saved ₹40 on delivery!
+                        {selectedLocationDetails?.delivery_fee === 0 
+                          ? 'Free delivery on this location!' 
+                          : 'Delivery included!'}
                       </p>
                     </div>
                   )}
                 </div>
+              </div>
+              
+              {/* Order Summary Note */}
+              <div className="mt-6 pt-6 border-t">
+                <p className="text-xs text-gray-500 text-center">
+                  Your order will be delivered to the selected pickup point.
+                  Please bring your order confirmation when collecting.
+                </p>
               </div>
             </div>
           </div>

@@ -11,6 +11,7 @@ interface Order {
   total_amount: number;
   status: string;
   phone?: string;
+  delivery_location?: string;
   delivery_address?: string;
   delivery_city?: string;
   delivery_state?: string;
@@ -55,7 +56,7 @@ export default function Orders() {
       if (!user) return;
 
       try {
-        // Fetch orders with all fields
+        // Fetch orders with all fields including delivery_location
         const { data: ordersData, error: ordersError } = await supabase
           .from('orders')
           .select('*')
@@ -168,17 +169,50 @@ export default function Orders() {
     return item.price * item.quantity;
   };
 
-  // Get delivery information - prioritize order info, fallback to profile
+  // Get delivery information - prioritize order delivery_location, fallback to profile
   const getDeliveryInfo = (order: Order) => {
     const userProfile = profiles[order.user_id];
     
+    // FIRST PRIORITY: delivery_location from orders table (new orders)
+    // SECOND PRIORITY: delivery_address from orders table (old orders)
+    // THIRD PRIORITY: address from profile
+    
+    let deliveryAddress = 'Not provided';
+    
+    if (order.delivery_location) {
+      deliveryAddress = order.delivery_location;
+    } else if (order.delivery_address) {
+      deliveryAddress = order.delivery_address;
+    } else if (userProfile?.address) {
+      deliveryAddress = userProfile.address;
+    }
+    
     return {
       phone: order.phone || userProfile?.mobile || 'Not provided',
-      address: order.delivery_address || userProfile?.address || 'Not provided',
+      address: deliveryAddress,
       city: order.delivery_city || userProfile?.city || '',
       state: order.delivery_state || userProfile?.state || '',
       pincode: order.delivery_pincode || userProfile?.pincode || '',
-      name: userProfile?.full_name || 'Customer'
+      name: userProfile?.full_name || 'Customer',
+    };
+  };
+
+  // Parse delivery location string into name and description
+  const parseDeliveryLocation = (location: string) => {
+    if (!location) return { name: '', description: '' };
+    
+    // Format: "Location Name - Description"
+    const parts = location.split(' - ');
+    if (parts.length >= 2) {
+      return {
+        name: parts[0],
+        description: parts.slice(1).join(' - ')
+      };
+    }
+    
+    return {
+      name: location,
+      description: ''
     };
   };
 
@@ -223,6 +257,7 @@ export default function Orders() {
             {orders.map((order, index) => {
               const deliveryInfo = getDeliveryInfo(order);
               const orderNumber = getOrderNumber(order, index);
+              const locationDetails = parseDeliveryLocation(deliveryInfo.address);
               
               return (
                 <div key={order.id} className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -311,15 +346,33 @@ export default function Orders() {
                           </div>
                         </div>
                         
+                        {/* Delivery Location Display */}
                         {deliveryInfo.address && deliveryInfo.address !== 'Not provided' && (
-                          <div className="flex items-start">
-                            <MapPin className="h-5 w-5 mr-3 text-gray-500 mt-0.5" />
-                            <div>
-                              <p className="text-sm text-gray-600 mb-1">Delivery Address</p>
-                              <div className="text-gray-900">
-                                <p className="font-medium">{deliveryInfo.address}</p>
+                          <div className="space-y-3">
+                            <div className="flex items-start">
+                              <MapPin className="h-5 w-5 mr-3 text-gray-500 mt-0.5" />
+                              <div className="flex-1">
+                                <p className="text-sm text-gray-600 mb-1">Delivery Point</p>
+                                
+                                {/* Show location name and description separately if available */}
+                                {locationDetails.name ? (
+                                  <div>
+                                    <p className="text-gray-900 font-semibold text-lg">
+                                      {locationDetails.name}
+                                    </p>
+                                    {locationDetails.description && (
+                                      <p className="text-gray-700 mt-1">
+                                        {locationDetails.description}
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <p className="text-gray-900 font-medium">{deliveryInfo.address}</p>
+                                )}
+                                
+                                {/* Legacy address fields (for old orders) */}
                                 {(deliveryInfo.city || deliveryInfo.state || deliveryInfo.pincode) && (
-                                  <p className="mt-1">
+                                  <p className="mt-2 text-sm text-gray-600">
                                     {deliveryInfo.city && `${deliveryInfo.city}, `}
                                     {deliveryInfo.state && `${deliveryInfo.state} `}
                                     {deliveryInfo.pincode && `- ${deliveryInfo.pincode}`}
@@ -329,15 +382,6 @@ export default function Orders() {
                             </div>
                           </div>
                         )}
-                        
-                        {/* Show source of address info */}
-                        <div className="mt-3 pt-3 border-t border-green-100">
-                          <p className="text-xs text-gray-500">
-                            {order.delivery_address 
-                              ? "Address from order details" 
-                              : "Address from your profile"}
-                          </p>
-                        </div>
                       </div>
                     </div>
                   </div>
