@@ -21,6 +21,7 @@ export default function ProductDetail() {
         .from('products')
         .select('*')
         .eq('slug', slug)
+        .eq('is_visible', true)
         .maybeSingle();
 
       setProduct(data);

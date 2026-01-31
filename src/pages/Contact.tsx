@@ -53,9 +53,9 @@ export default function Contact() {
                 <div>
                   <h3 className="font-semibold text-gray-900 mb-1">Visit Us</h3>
                   <p className="text-gray-600">
-                    123 Farm Road, Green Valley<br />
-                    Mumbai, Maharashtra 400001<br />
-                    India
+                    147003 Venture Lab<br />
+                    Thapar Intstitute of Engineering and Technology<br />
+                    Patiala, Punjab,India
                   </p>
                 </div>
               </div>
@@ -67,8 +67,7 @@ export default function Contact() {
                 <div>
                   <h3 className="font-semibold text-gray-900 mb-1">Call Us</h3>
                   <p className="text-gray-600">
-                    Customer Support: +91 9876543210<br />
-                    Business Inquiries: +91 9876543211
+                    Customer Support: +91 7309685242
                   </p>
                 </div>
               </div>
@@ -80,8 +79,7 @@ export default function Contact() {
                 <div>
                   <h3 className="font-semibold text-gray-900 mb-1">Email Us</h3>
                   <p className="text-gray-600">
-                    General: hello@freshharvest.com<br />
-                    Support: support@freshharvest.com
+                    grostiy.connect@gmail.com<br />
                   </p>
                 </div>
               </div>

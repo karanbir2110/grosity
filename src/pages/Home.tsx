@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Truck, Shield, Clock, Leaf } from 'lucide-react';
+import { ArrowRight, Truck, Shield, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Category, Product } from '../types/database';
 import ProductCard from '../components/ProductCard';
@@ -32,7 +32,7 @@ export default function Home() {
           <div className="grid md:grid-cols-2 gap-12 items-center">
             <div>
               <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
-                Fresh Produce
+                Fresh Produced
                 <span className="block text-green-600">Delivered Daily</span>
               </h1>
               <p className="text-xl text-gray-600 mb-8">
@@ -112,10 +112,10 @@ export default function Home() {
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                  Instant Delivery
+                  Delivery
                 </h3>
                 <p className="text-gray-600">
-                  Order before 11 PM
+                  We Deliver from 9 AM to 9 PM
                 </p>
               </div>
             </div>

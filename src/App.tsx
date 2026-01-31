@@ -16,7 +16,7 @@ import About from './pages/About';
 import Contact from './pages/Contact';
 import ResetPassword from './pages/ResetPassword';
 import ForgotPassword from './pages/Forgotpassword';
-
+import TestPaymentPage from './pages/TestPayment';
 
 function App() {
   return (
@@ -40,6 +40,7 @@ function App() {
                 <Route path="/contact" element={<Contact />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/test-payment" element={<TestPaymentPage />} />
               </Routes>
             </main>
             <Footer />

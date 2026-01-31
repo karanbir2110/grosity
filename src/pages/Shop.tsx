@@ -52,19 +52,21 @@ export default function Shop() {
   };
 
   useEffect(() => {
-    async function fetchData() {
-      const [categoriesRes, productsRes] = await Promise.all([
-        supabase.from('categories').select('*'),
-        supabase.from('products').select('*').eq('is_available', true),
-      ]);
+  async function fetchData() {
+    const [categoriesRes, productsRes] = await Promise.all([
+      supabase.from('categories').select('*'),
+      supabase.from('products').select('*')
+        .eq('is_available', true)
+        .eq('is_visible', true),  // ← ADD THIS
+    ]);
 
-      if (categoriesRes.data) setCategories(categoriesRes.data);
-      if (productsRes.data) setProducts(productsRes.data);
-      setLoading(false);
-    }
+    if (categoriesRes.data) setCategories(categoriesRes.data);
+    if (productsRes.data) setProducts(productsRes.data);
+    setLoading(false);
+  }
 
-    fetchData();
-  }, []);
+  fetchData();
+}, []);
 
   useEffect(() => {
     let filtered = [...products];

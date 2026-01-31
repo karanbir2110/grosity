@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Leaf } from 'lucide-react';
 import { supabase } from '../lib/supabase'; // Import supabase directly
@@ -11,6 +11,38 @@ export default function Login() {
     password: '',
   });
   const [error, setError] = useState('');
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  // Check if user is already logged in
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+          // User is already logged in, redirect to profile page
+          navigate('/profile');
+        }
+      } catch (err) {
+        console.error('Error checking authentication:', err);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+
+    // Set up auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        navigate('/profile');
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -24,13 +56,28 @@ export default function Login() {
       });
 
       if (error) throw error;
-      navigate('/');
+      navigate('/profile');
     } catch (err: any) {
       setError(err.message || 'Failed to sign in');
     } finally {
       setLoading(false);
     }
   };
+
+  // Show loading state while checking authentication
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-flex items-center space-x-2 text-green-600 mb-6">
+            <Leaf className="h-10 w-10 animate-pulse" />
+            <span className="text-5xl font-bold">Grosity</span>
+          </div>
+          <p className="text-gray-600 mt-4">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center py-12 px-4">

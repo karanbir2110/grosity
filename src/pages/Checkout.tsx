@@ -1,9 +1,11 @@
-import { useState, useEffect, FormEvent, useMemo } from 'react';
+import { useState, useEffect, FormEvent, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag, MapPin } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, MapPin, CreditCard } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import PaymentButton from '../components/PaymentButton';
+import type { RazorpaySuccessResponse } from '../types/razorpay.d';
 
 interface ProfileForm {
   full_name: string;
@@ -30,12 +32,39 @@ export default function Checkout() {
   const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(true);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'online'>('online');
+  const [orderId, setOrderId] = useState<string>('');
+  const [orderAmount, setOrderAmount] = useState<number>(0);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
     mobile: '',
     address: '',
   });
+
+  /* =======================
+     AUTHENTICATION CHECK
+     ======================= */
+  useEffect(() => {
+    // Give a moment for auth to initialize
+    const timer = setTimeout(() => {
+      setIsInitialized(true);
+      
+      // Check if user exists after initialization
+      if (!user) {
+        console.log('No user found, redirecting to login');
+        navigate('/login', { 
+          state: { 
+            from: '/checkout',
+            message: 'Please login to proceed to checkout' 
+          } 
+        });
+      }
+    }, 800); // Increased timeout to ensure auth is loaded
+
+    return () => clearTimeout(timer);
+  }, [user, navigate]);
 
   /* =======================
      FETCH DELIVERY LOCATIONS
@@ -73,36 +102,38 @@ export default function Checkout() {
      ======================= */
   useEffect(() => {
     const fetchProfile = async () => {
-      if (!user) return;
+      if (!user || deliveryLocations.length === 0) return;
 
-      const { data } = await (supabase as any)
-        .from('profiles')
-        .select('full_name, mobile, address')
-        .eq('id', user.id)
-        .single();
+      try {
+        const { data } = await (supabase as any)
+          .from('profiles')
+          .select('full_name, mobile, address')
+          .eq('id', user.id)
+          .single();
 
-      if (data) {
-        setProfile({
-          full_name: data.full_name ?? '',
-          mobile: data.mobile ?? '',
-          address: data.address ?? '',
-        });
+        if (data) {
+          setProfile({
+            full_name: data.full_name ?? '',
+            mobile: data.mobile ?? '',
+            address: data.address ?? '',
+          });
 
-        // Check if saved address matches any delivery location
-        if (data.address && deliveryLocations.length > 0) {
-          const matchedLocation = deliveryLocations.find(
-            loc => data.address?.includes(loc.name)
-          );
-          if (matchedLocation) {
-            setSelectedLocation(matchedLocation.id);
+          // Check if saved address matches any delivery location
+          if (data.address) {
+            const matchedLocation = deliveryLocations.find(
+              loc => data.address?.includes(loc.name)
+            );
+            if (matchedLocation) {
+              setSelectedLocation(matchedLocation.id);
+            }
           }
         }
+      } catch (err) {
+        console.error('Error fetching profile:', err);
       }
     };
 
-    if (deliveryLocations.length > 0) {
-      fetchProfile();
-    }
+    fetchProfile();
   }, [user, deliveryLocations]);
 
   /* =======================
@@ -126,17 +157,293 @@ export default function Checkout() {
     ? deliveryLocations.find(loc => loc.id === selectedLocation)
     : null;
 
-  const deliveryCharge = useMemo(() => {
-    if (selectedLocationDetails) {
-      return selectedLocationDetails.delivery_fee;
+  // FIXED: Helper function to calculate delivery charge
+  const calculateDeliveryCharge = useCallback((cartTotal: number) => {
+    // Rule 1: Free delivery for orders ₹99 or above
+    if (cartTotal >= 99) {
+      return 0;
     }
-    return totalPrice >= 99 ? 0 : 40; // Fallback
-  }, [totalPrice, selectedLocationDetails]);
+    
+    // Rule 2: If cart is under ₹99, charge ₹40 PLUS location's fee
+    let charge = 40; // ₹40 base charge
+    
+    if (selectedLocationDetails) {
+      // Add location's fee to the ₹40 base
+      charge += selectedLocationDetails.delivery_fee;
+    }
+    
+    return charge;
+  }, [selectedLocationDetails]);
 
-  const finalTotal = useMemo(
-    () => totalPrice + deliveryCharge,
-    [totalPrice, deliveryCharge]
-  );
+  // Calculate delivery charge
+  const deliveryCharge = useMemo(() => {
+    return calculateDeliveryCharge(totalPrice);
+  }, [totalPrice, calculateDeliveryCharge]);
+
+  // Calculate final total with debugging
+  const finalTotal = useMemo(() => {
+    // Calculate cart total manually for verification
+    const manualCartTotal = items.reduce((sum, item) => {
+      const price = item.product.price || 0;
+      const discount = item.product.discount_percentage || 0;
+      const discountedPrice = price * (1 - discount / 100);
+      return sum + (discountedPrice * item.quantity);
+    }, 0);
+
+    // Calculate delivery using the same helper
+    const delivery = calculateDeliveryCharge(manualCartTotal);
+
+    // Final total
+    const calculatedTotal = manualCartTotal + delivery;
+
+    // Debug log
+    console.log('🛒 Cart Debug:', {
+      itemsCount: items.length,
+      cartTotalFromContext: totalPrice,
+      manualCartTotal,
+      delivery,
+      calculatedTotal,
+      selectedLocation: selectedLocationDetails?.name || 'None',
+      locationFee: selectedLocationDetails?.delivery_fee || 0,
+      baseCharge: manualCartTotal < 99 ? 40 : 0,
+      freeDelivery: manualCartTotal >= 99 ? 'YES (₹99+ threshold)' : 'NO'
+    });
+
+    return calculatedTotal;
+  }, [totalPrice, calculateDeliveryCharge, items]);
+
+  /* =======================
+     CREATE ORDER IN DATABASE
+     ======================= */
+  const createOrderInDatabase = async (paymentMethod: 'cod' | 'online', razorpayPaymentId?: string) => {
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
+    if (!profile.full_name || !profile.mobile) {
+      throw new Error('Please fill all personal details');
+    }
+
+    if (!selectedLocation) {
+      throw new Error('Please select a delivery location');
+    }
+
+    if (items.length === 0) {
+      throw new Error('Your cart is empty');
+    }
+
+    // Validate amount
+    if (finalTotal <= 0) {
+      throw new Error(`Invalid order total: ₹${finalTotal}. Please check your cart items.`);
+    }
+
+    if (finalTotal < 1) {
+      throw new Error('Minimum order amount is ₹1');
+    }
+
+    // Check stock availability
+    const insufficientStockItems = items.filter(item => 
+      (item.product.stock_quantity || 0) < item.quantity
+    );
+
+    if (insufficientStockItems.length > 0) {
+      const productNames = insufficientStockItems.map(item => item.product.name).join(', ');
+      throw new Error(`Insufficient stock for: ${productNames}. Please update your cart.`);
+    }
+
+    try {
+      /* 1️⃣ UPDATE PROFILE */
+      const { error: profileError } = await (supabase as any)
+        .from('profiles')
+        .update({
+          full_name: profile.full_name,
+          mobile: profile.mobile,
+          address: profile.address,
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      /* 2️⃣ CREATE ORDER */
+      const { data: order, error: orderError } = await (supabase as any)
+        .from('orders')
+        .insert({
+          user_id: user.id,
+          total_amount: finalTotal,
+          status: paymentMethod === 'online' ? 'paid' : 'pending',
+          delivery_location: profile.address,
+          payment_method: paymentMethod,
+          payment_status: paymentMethod === 'online' ? 'paid' : 'pending',
+        })
+        .select('id')
+        .single();
+
+      if (orderError) throw orderError;
+
+      console.log('✅ Order created in database:', order.id);
+
+      /* 3️⃣ CREATE PAYMENT RECORD (only for online payments) */
+      if (paymentMethod === 'online' && razorpayPaymentId) {
+        try {
+          const { error: paymentError } = await (supabase as any)
+            .from('payments')
+            .insert({
+              order_id: order.id,
+              user_id: user.id,
+              amount: finalTotal,
+              razorpay_payment_id: razorpayPaymentId,
+              razorpay_signature: '', // Will be updated by verify-payment
+              status: 'pending_verification',
+              payment_method: 'razorpay'
+            });
+
+          if (paymentError) {
+            console.warn('Payment record creation warning:', paymentError);
+          } else {
+            console.log('✅ Payment record created');
+          }
+        } catch (paymentErr) {
+          console.warn('Payment record creation warning:', paymentErr);
+          // Don't fail the order if payment record fails
+        }
+      }
+
+      /* 4️⃣ CREATE ORDER ITEMS */
+      const orderItems = items.map(item => ({
+        order_id: order.id,
+        product_id: item.product.id,
+        product_name: item.product.name,
+        quantity: item.quantity,
+        price: item.product.price * (1 - item.product.discount_percentage / 100),
+      }));
+
+      const { error: orderItemsError } = await (supabase as any)
+        .from('order_items')
+        .insert(orderItems);
+
+      if (orderItemsError) throw orderItemsError;
+
+      console.log('✅ Order items created:', orderItems.length);
+
+      /* 5️⃣ UPDATE PRODUCT STOCK QUANTITIES */
+      const updateStockPromises = items.map(item => 
+        (supabase as any)
+          .from('products')
+          .update({
+            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
+          })
+          .eq('id', item.product.id)
+      );
+
+      const updateResults = await Promise.all(updateStockPromises);
+      
+      const stockUpdateErrors = updateResults.filter(result => result.error);
+      if (stockUpdateErrors.length > 0) {
+        console.error('Stock update errors:', stockUpdateErrors);
+      }
+
+      setOrderId(order.id);
+      return order.id;
+    } catch (err) {
+      console.error('❌ Error creating order:', err);
+      throw err;
+    }
+  };
+
+  /* =======================
+     HANDLE ONLINE PAYMENT SUCCESS
+     ======================= */
+  const handlePaymentSuccess = async (response: RazorpaySuccessResponse) => {
+    try {
+      setLoading(true);
+      
+      console.log('💰 Payment Success Response:', response);
+      console.log('📦 Final Total being processed:', finalTotal);
+      
+      // Validate amount again
+      if (finalTotal <= 0) {
+        throw new Error(`Cannot process order with amount: ₹${finalTotal}. Please add items to your cart.`);
+      }
+
+      if (finalTotal < 1) {
+        throw new Error('Minimum order amount is ₹1');
+      }
+
+      // Create order in database with payment ID
+      const orderId = await createOrderInDatabase('online', response.razorpay_payment_id);
+      
+      console.log('🎉 Order completed successfully:', orderId);
+      
+      // Save order amount before clearing cart
+      setOrderAmount(finalTotal);
+      clearCart();
+      setOrderPlaced(true);
+    } catch (err: any) {
+      console.error('❌ Payment success handler error:', err);
+      alert(err.message || 'Error processing payment. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* =======================
+     HANDLE PAYMENT ERROR
+     ======================= */
+  const handlePaymentError = (error: any) => {
+    console.error('Payment error:', error);
+    alert('Payment failed. Please try again or choose Cash on Delivery.');
+  };
+
+  /* =======================
+     HANDLE PAYMENT CLOSE
+     ======================= */
+  const handlePaymentClose = () => {
+    console.log('Payment modal closed by user');
+  };
+
+  /* =======================
+     HANDLE CASH ON DELIVERY
+     ======================= */
+  const handleCashOnDelivery = async (e: FormEvent) => {
+    e.preventDefault();
+    
+    // Validate amount
+    if (finalTotal <= 0) {
+      alert(`Cannot place order with amount: ₹${finalTotal}. Please add items to your cart.`);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await createOrderInDatabase('cod');
+      // Save order amount before clearing cart
+      setOrderAmount(finalTotal);
+      clearCart();
+      setOrderPlaced(true);
+    } catch (err: any) {
+      alert(err.message || 'Error placing order. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Show loading while initializing
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading checkout...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If redirected, show nothing (navigation will happen)
+  if (!user) {
+    return null;
+  }
 
   /* =======================
      EMPTY CART MESSAGE
@@ -167,137 +474,39 @@ export default function Checkout() {
   }
 
   /* =======================
-     PLACE ORDER
-     ======================= */
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-
-    if (!user) {
-      alert('Please login first');
-      return;
-    }
-
-    if (!profile.full_name || !profile.mobile) {
-      alert('Please fill all personal details');
-      return;
-    }
-
-    if (!selectedLocation) {
-      alert('Please select a delivery location');
-      return;
-    }
-
-    if (items.length === 0) {
-      alert('Your cart is empty');
-      return;
-    }
-
-    // Check stock availability before proceeding
-    const insufficientStockItems = items.filter(item => 
-      (item.product.stock_quantity || 0) < item.quantity
-    );
-
-    if (insufficientStockItems.length > 0) {
-      const productNames = insufficientStockItems.map(item => item.product.name).join(', ');
-      alert(`Insufficient stock for: ${productNames}. Please update your cart.`);
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      /* 1️⃣ UPDATE PROFILE (with delivery location as address) */
-      const { error: profileError } = await (supabase as any)
-        .from('profiles')
-        .update({
-          full_name: profile.full_name,
-          mobile: profile.mobile,
-          address: profile.address,
-        })
-        .eq('id', user.id);
-
-      if (profileError) throw profileError;
-
-      /* 2️⃣ CREATE ORDER WITH DELIVERY LOCATION */
-      const { data: order, error: orderError } = await (supabase as any)
-        .from('orders')
-        .insert({
-          user_id: user.id,
-          total_amount: finalTotal,
-          status: 'pending',
-          delivery_location: profile.address, // SAVE DELIVERY LOCATION TO ORDERS TABLE
-        })
-        .select('id')
-        .single();
-
-      if (orderError) throw orderError;
-
-      /* 3️⃣ CREATE ORDER ITEMS */
-      const orderItems = items.map(item => ({
-        order_id: order.id,
-        product_id: item.product.id,
-        product_name: item.product.name,
-        quantity: item.quantity,
-        price:
-          item.product.price *
-          (1 - item.product.discount_percentage / 100),
-      }));
-
-      const { error: orderItemsError } = await (supabase as any)
-        .from('order_items')
-        .insert(orderItems);
-
-      if (orderItemsError) throw orderItemsError;
-
-      /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
-      const updateStockPromises = items.map(item => 
-        (supabase as any)
-          .from('products')
-          .update({
-            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
-          })
-          .eq('id', item.product.id)
-      );
-
-      const updateResults = await Promise.all(updateStockPromises);
-      
-      const stockUpdateErrors = updateResults.filter(result => result.error);
-      if (stockUpdateErrors.length > 0) {
-        console.error('Stock update errors:', stockUpdateErrors);
-      }
-
-      clearCart();
-      setOrderPlaced(true);
-    } catch (err) {
-      console.error(err);
-      alert('Something went wrong. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* =======================
      SUCCESS SCREEN
      ======================= */
   if (orderPlaced) {
+    const isOnlinePayment = paymentMethod === 'online';
+    
     return (
       <div className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-2xl mx-auto px-4 text-center">
           <CheckCircle className="h-24 w-24 text-green-600 mx-auto mb-6" />
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Order Placed Successfully!
+            {isOnlinePayment ? 'Payment Successful!' : 'Order Placed Successfully!'}
           </h1>
           <p className="text-gray-600 mb-4">
-            Your order has been placed successfully.
+            {isOnlinePayment 
+              ? 'Your payment has been processed successfully.' 
+              : 'Your order has been placed successfully.'}
           </p>
           <p className="text-gray-600 mb-8">
+            Order ID: <span className="font-semibold">#{orderId}</span>
+            <br />
             We'll contact you at{' '}
             <span className="font-semibold">{profile.mobile}</span>
           </p>
 
           <div className="text-left bg-white p-6 rounded-lg shadow-md mb-8 max-w-md mx-auto">
-            <h2 className="text-lg font-semibold mb-3">Delivery Details</h2>
+            <h2 className="text-lg font-semibold mb-3">Order & Delivery Details</h2>
             <div className="space-y-2">
+              <p className="text-gray-700">
+                <span className="font-medium">Order ID:</span> #{orderId}
+              </p>
+              <p className="text-gray-700">
+                <span className="font-medium">Payment Method:</span> {isOnlinePayment ? 'Online Payment' : 'Cash on Delivery'}
+              </p>
               <p className="text-gray-700">
                 <span className="font-medium">Name:</span> {profile.full_name}
               </p>
@@ -310,8 +519,12 @@ export default function Checkout() {
               <p className="text-gray-700">
                 <span className="font-medium">Location:</span> {selectedLocationDetails?.description}
               </p>
+              <p className="text-gray-700">
+                <span className="font-medium">Total Amount:</span> ₹{orderAmount.toFixed(2)}
+              </p>
               <p className="text-gray-700 text-sm mt-4 pt-4 border-t">
                 <span className="font-medium">Note:</span> Please collect your order from this location during the specified delivery hours.
+                {!isOnlinePayment && ' Please keep exact change ready for payment.'}
               </p>
             </div>
           </div>
@@ -356,7 +569,7 @@ export default function Checkout() {
           {/* LEFT COLUMN - FORM */}
           <div className="lg:col-span-2">
             <form
-              onSubmit={handleSubmit}
+              onSubmit={handleCashOnDelivery}
               className="bg-white rounded-xl shadow-md p-6 md:p-8"
             >
               <h2 className="text-xl font-bold text-gray-800 mb-6">
@@ -500,32 +713,168 @@ export default function Checkout() {
                     </div>
                   )}
                 </div>
+
+                {/* Payment Method Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Payment Method *
+                  </label>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div
+                      className={`relative flex items-center justify-center p-4 border rounded-lg cursor-pointer transition-all ${
+                        paymentMethod === 'online'
+                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                      onClick={() => setPaymentMethod('online')}
+                    >
+                      <div className="flex items-center h-5 absolute left-3">
+                        <input
+                          type="radio"
+                          name="payment-method"
+                          checked={paymentMethod === 'online'}
+                          onChange={() => setPaymentMethod('online')}
+                          className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="text-center">
+                        <CreditCard className="h-6 w-6 text-blue-600 mx-auto mb-2" />
+                        <label className="block text-sm font-medium text-gray-800 cursor-pointer">
+                          Online Payment
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1">Pay now with Razorpay</p>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`relative flex items-center justify-center p-4 border rounded-lg cursor-pointer transition-all ${
+                        paymentMethod === 'cod'
+                          ? 'border-green-500 bg-green-50 ring-2 ring-green-200'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                      onClick={() => setPaymentMethod('cod')}
+                    >
+                      <div className="flex items-center h-5 absolute left-3">
+                        <input
+                          type="radio"
+                          name="payment-method"
+                          checked={paymentMethod === 'cod'}
+                          onChange={() => setPaymentMethod('cod')}
+                          className="h-4 w-4 text-green-600 border-gray-300 focus:ring-green-500"
+                        />
+                      </div>
+                      <div className="text-center">
+                        <svg className="h-6 w-6 text-green-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        <label className="block text-sm font-medium text-gray-800 cursor-pointer">
+                          Cash on Delivery
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1">Pay when you receive</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {paymentMethod === 'online' && (
+                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-700 flex items-center">
+                        <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.2 6.5 10.266a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
+                        </svg>
+                        Secure online payment powered by Razorpay
+                      </p>
+                    </div>
+                  )}
+
+                  {paymentMethod === 'cod' && (
+                    <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-700">
+                        <span className="font-medium">Note:</span> Please keep exact change ready for delivery.
+                        Additional charges may apply for large orders.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={loading || !selectedLocation || deliveryLocations.length === 0}
-                className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg relative overflow-hidden group"
-              >
-                {loading ? (
-                  <>
-                    <span className="opacity-0">Place Order</span>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+              {/* Payment Buttons */}
+              {paymentMethod === 'online' ? (
+                <div className="mt-8">
+                  {finalTotal <= 0 ? (
+                    <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-red-700 font-medium">
+                        ❌ Cannot proceed with payment: Order total is ₹{finalTotal.toFixed(2)}
+                      </p>
+                      <p className="text-red-600 text-sm mt-1">
+                        Please add items to your cart or check product prices.
+                      </p>
                     </div>
-                  </>
-                ) : (
-                  'Place Order'
-                )}
-                {!selectedLocation && deliveryLocations.length > 0 && (
-                  <span className="block text-sm font-normal mt-1 text-red-100">
-                    * Please select a delivery location
-                  </span>
-                )}
-              </button>
+                  ) : (
+                    <>
+                      <PaymentButton
+                        amount={finalTotal} // Amount in RUPEES only
+                        currency="INR"
+                        productName={`Order #${Date.now()}`}
+                        receipt={`order_${Date.now()}`}
+                        customerName={profile.full_name}
+                        customerEmail={user?.email || ''}
+                        customerPhone={profile.mobile}
+                        notes={{
+                          order_items: items.map(item => item.product.name).join(', '),
+                          delivery_location: selectedLocationDetails?.name || '',
+                          user_id: user?.id || ''
+                        }}
+                        onSuccess={handlePaymentSuccess}
+                        onError={handlePaymentError}
+                        onClose={handlePaymentClose}
+                        className="w-full py-4 text-lg"
+                      >
+                        <div className="flex items-center justify-center gap-2">
+                          <CreditCard className="h-5 w-5" />
+                          Pay ₹{finalTotal.toFixed(2)}
+                        </div>
+                      </PaymentButton>
+                      
+                      <p className="text-xs text-gray-500 text-center mt-4">
+                        You will be redirected to Razorpay's secure payment gateway.
+                      </p>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={loading || !selectedLocation || deliveryLocations.length === 0 || finalTotal <= 0}
+                  className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg relative overflow-hidden group"
+                >
+                  {loading ? (
+                    <>
+                      <span className="opacity-0">Place Order (Cash on Delivery)</span>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                      </div>
+                    </>
+                  ) : (
+                    `Place Order - ₹${finalTotal.toFixed(2)} (Cash on Delivery)`
+                  )}
+                  {!selectedLocation && deliveryLocations.length > 0 && (
+                    <span className="block text-sm font-normal mt-1 text-red-100">
+                      * Please select a delivery location
+                    </span>
+                  )}
+                  {finalTotal <= 0 && (
+                    <span className="block text-sm font-normal mt-1 text-red-100">
+                      * Cannot place order with ₹0 total
+                    </span>
+                  )}
+                </button>
+              )}
               
               <p className="text-xs text-gray-500 text-center mt-4">
-                Your selected delivery point will be saved with your order for future reference.
+                {paymentMethod === 'online' 
+                  ? 'Your payment is secured with 256-bit SSL encryption.' 
+                  : 'Your selected delivery point will be saved with your order for future reference.'}
               </p>
             </form>
           </div>
@@ -582,7 +931,7 @@ export default function Checkout() {
               <div className="border-t pt-6 space-y-3">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal ({items.length} items)</span>
-                  <span>₹{totalPrice.toFixed(2)}</span>
+                  <span>₹{(finalTotal - deliveryCharge).toFixed(2)}</span>
                 </div>
                 
                 <div className="flex justify-between text-gray-600">
@@ -612,7 +961,12 @@ export default function Checkout() {
                     <p className="text-xs text-gray-500">{selectedLocationDetails.description}</p>
                     {selectedLocationDetails.delivery_fee > 0 && (
                       <p className="text-xs text-gray-600 mt-1">
-                        Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                        Location Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                      </p>
+                    )}
+                    {totalPrice < 99 && selectedLocationDetails.delivery_fee > 0 && (
+                      <p className="text-xs text-gray-600 mt-1">
+                        Base Charge: ₹40.00
                       </p>
                     )}
                   </div>
@@ -624,15 +978,29 @@ export default function Checkout() {
                     <span className="text-green-600">₹{finalTotal.toFixed(2)}</span>
                   </div>
                   
-                  {deliveryCharge === 0 && (
+                  {finalTotal <= 0 && (
+                    <div className="mt-2 p-2 bg-red-50 rounded-lg">
+                      <p className="text-sm text-red-700">
+                        ⚠️ Order total is ₹0. Please add items to your cart.
+                      </p>
+                    </div>
+                  )}
+                  
+                  {deliveryCharge === 0 && finalTotal > 0 && (
                     <div className="mt-2 p-2 bg-green-50 rounded-lg">
                       <p className="text-sm text-green-700 flex items-center">
                         <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.2 6.5 10.266a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
                         </svg>
-                        {selectedLocationDetails?.delivery_fee === 0 
-                          ? 'Free delivery on this location!' 
-                          : 'Delivery included!'}
+                        Free delivery on orders ₹99 and above!
+                      </p>
+                    </div>
+                  )}
+
+                  {totalPrice < 99 && deliveryCharge > 0 && (
+                    <div className="mt-2 p-2 bg-blue-50 rounded-lg">
+                      <p className="text-sm text-blue-700">
+                        Delivery includes ₹40 base charge {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 ? `+ ₹${selectedLocationDetails.delivery_fee.toFixed(2)} location fee` : ''}
                       </p>
                     </div>
                   )}
@@ -641,6 +1009,29 @@ export default function Checkout() {
               
               {/* Order Summary Note */}
               <div className="mt-6 pt-6 border-t">
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    {paymentMethod === 'online' ? (
+                      <>
+                        <CreditCard className="h-4 w-4 text-blue-600" />
+                        <span className="text-sm font-medium text-blue-700">Online Payment Selected</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        <span className="text-sm font-medium text-green-700">Cash on Delivery Selected</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {paymentMethod === 'online'
+                      ? 'Complete payment now to confirm your order instantly.'
+                      : 'Pay when you collect your order from the delivery point.'}
+                  </p>
+                </div>
+                
                 <p className="text-xs text-gray-500 text-center">
                   Your order will be delivered to the selected pickup point.
                   Please bring your order confirmation when collecting.
