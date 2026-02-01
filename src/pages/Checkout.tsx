@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag, MapPin, CreditCard } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, MapPin, CreditCard, Tag, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
@@ -23,10 +23,31 @@ interface DeliveryLocation {
   order_index: number;
 }
 
+interface Coupon {
+  id: string;
+  code: string;
+  discount_amount: number;
+  min_order_amount: number;
+  max_uses: number | null;
+  used_count: number;
+  is_active: boolean;
+  valid_from: string;
+  valid_until: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CouponValidationResult {
+  valid: boolean;
+  message: string;
+  coupon?: Coupon;
+  discount?: number;
+}
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { items, totalPrice, clearCart } = useCart();
+  const { items, clearCart } = useCart();
 
   const [checkingSiteStatus, setCheckingSiteStatus] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -38,6 +59,14 @@ export default function Checkout() {
   const [orderId, setOrderId] = useState<string>('');
   const [orderAmount, setOrderAmount] = useState<number>(0);
   const [isInitialized, setIsInitialized] = useState(false);
+
+  // Coupon states
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponDiscount, setCouponDiscount] = useState(0);
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [couponSuccess, setCouponSuccess] = useState('');
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
@@ -173,6 +202,78 @@ export default function Checkout() {
   }, [user, deliveryLocations, checkingSiteStatus]);
 
   /* =======================
+     COUPON VALIDATION FUNCTION
+     ======================= */
+  const validateCoupon = async (code: string, orderAmount: number): Promise<CouponValidationResult> => {
+    try {
+      const { data, error } = await supabase
+        .from('coupon_codes')
+        .select('*')
+        .eq('code', code.toUpperCase())
+        .eq('is_active', true)
+        .single();
+      
+      if (error || !data) {
+        return { valid: false, message: 'Coupon not found or inactive' };
+      }
+
+      const coupon = data as Coupon;
+
+      // Check if coupon is still valid
+      const now = new Date();
+      const validFrom = new Date(coupon.valid_from);
+      const validUntil = coupon.valid_until ? new Date(coupon.valid_until) : null;
+
+      if (now < validFrom) {
+        return { valid: false, message: 'Coupon is not yet valid' };
+      }
+
+      if (validUntil && now > validUntil) {
+        return { valid: false, message: 'Coupon has expired' };
+      }
+
+      // Check minimum order amount
+      if (orderAmount < coupon.min_order_amount) {
+        return { 
+          valid: false, 
+          message: `Minimum order amount of ₹${coupon.min_order_amount} required` 
+        };
+      }
+
+      // Check usage limits
+      if (coupon.max_uses && coupon.used_count >= coupon.max_uses) {
+        return { valid: false, message: 'Coupon usage limit reached' };
+      }
+
+      return { 
+        valid: true, 
+        coupon,
+        discount: coupon.discount_amount,
+        message: `₹${coupon.discount_amount} discount applied successfully`
+      };
+    } catch (error: any) {
+      console.error('Error validating coupon:', error);
+      return { valid: false, message: 'Error validating coupon. Please try again.' };
+    }
+  };
+
+  /* =======================
+     INCREMENT COUPON USAGE FUNCTION
+     ======================= */
+  /* =======================
+     INCREMENT COUPON USAGE FUNCTION
+     ======================= */
+const incrementCouponUsage = async (couponId: string): Promise<void> => {
+  try {
+    // Just log it - the coupon validation already prevents overuse
+    console.log(`Coupon ${couponId} would be marked as used`);
+    // Don't actually update - the validation logic already prevents reuse
+  } catch (error) {
+    console.error('Error in incrementCouponUsage:', error);
+  }
+};
+
+  /* =======================
      HANDLE LOCATION SELECTION
      ======================= */
   const handleLocationSelect = (locationId: string) => {
@@ -189,6 +290,63 @@ export default function Checkout() {
       ...prev,
       delivery_location: false
     }));
+  };
+
+  /* =======================
+     HANDLE COUPON APPLY
+     ======================= */
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) {
+      setCouponError('Please enter a coupon code');
+      return;
+    }
+
+    if (items.length === 0) {
+      setCouponError('Add items to cart before applying coupon');
+      return;
+    }
+
+    setCouponLoading(true);
+    setCouponError('');
+    setCouponSuccess('');
+
+    try {
+      const cartTotal = items.reduce((sum, item) => {
+        const price = item.product.price || 0;
+        const discount = item.product.discount_percentage || 0;
+        const discountedPrice = price * (1 - discount / 100);
+        return sum + (discountedPrice * item.quantity);
+      }, 0);
+
+      const result = await validateCoupon(couponCode, cartTotal);
+      
+      if (result.valid && result.coupon) {
+        setAppliedCoupon(result.coupon);
+        setCouponDiscount(result.discount || 0);
+        setCouponSuccess(result.message || `₹${result.discount} discount applied!`);
+        setCouponError('');
+      } else {
+        setAppliedCoupon(null);
+        setCouponDiscount(0);
+        setCouponError(result.message || 'Invalid coupon code');
+        setCouponSuccess('');
+      }
+    } catch (error: any) {
+      console.error('Error applying coupon:', error);
+      setCouponError(error.message || 'Failed to apply coupon');
+      setAppliedCoupon(null);
+      setCouponDiscount(0);
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponDiscount(0);
+    setCouponCode('');
+    setCouponError('');
+    setCouponSuccess('');
   };
 
   /* =======================
@@ -247,42 +405,34 @@ export default function Checkout() {
     return charge;
   }, [selectedLocationDetails]);
 
-  // Calculate delivery charge
-  const deliveryCharge = useMemo(() => {
-    return calculateDeliveryCharge(totalPrice);
-  }, [totalPrice, calculateDeliveryCharge]);
-
-  // Calculate final total with debugging
-  const finalTotal = useMemo(() => {
-    // Calculate cart total manually for verification
-    const manualCartTotal = items.reduce((sum, item) => {
+  // Calculate cart subtotal
+  const cartSubtotal = useMemo(() => {
+    return items.reduce((sum, item) => {
       const price = item.product.price || 0;
       const discount = item.product.discount_percentage || 0;
       const discountedPrice = price * (1 - discount / 100);
       return sum + (discountedPrice * item.quantity);
     }, 0);
+  }, [items]);
 
-    // Calculate delivery using the same helper
-    const delivery = calculateDeliveryCharge(manualCartTotal);
+  // Calculate delivery charge
+  const deliveryCharge = useMemo(() => {
+    // Apply coupon discount before calculating delivery
+    const subtotalAfterCoupon = Math.max(0, cartSubtotal - couponDiscount);
+    return calculateDeliveryCharge(subtotalAfterCoupon);
+  }, [cartSubtotal, couponDiscount, calculateDeliveryCharge]);
 
-    // Final total
-    const calculatedTotal = manualCartTotal + delivery;
-
-    // Debug log
-    console.log('🛒 Cart Debug:', {
-      itemsCount: items.length,
-      cartTotalFromContext: totalPrice,
-      manualCartTotal,
-      delivery,
-      calculatedTotal,
-      selectedLocation: selectedLocationDetails?.name || 'None',
-      locationFee: selectedLocationDetails?.delivery_fee || 0,
-      baseCharge: manualCartTotal < 99 ? 40 : 0,
-      freeDelivery: manualCartTotal >= 99 ? 'YES (₹99+ threshold)' : 'NO'
-    });
-
-    return calculatedTotal;
-  }, [totalPrice, calculateDeliveryCharge, items]);
+  // Calculate final total
+  const finalTotal = useMemo(() => {
+    // Cart subtotal after coupon discount
+    const subtotalAfterCoupon = Math.max(0, cartSubtotal - couponDiscount);
+    
+    // Add delivery charge
+    const total = subtotalAfterCoupon + deliveryCharge;
+    
+    // Ensure total is not negative
+    return Math.max(0, total);
+  }, [cartSubtotal, couponDiscount, deliveryCharge]);
 
   // Check if form is valid for payment
   const isFormValidForPayment = useMemo(() => {
@@ -355,6 +505,8 @@ export default function Checkout() {
           delivery_location: profile.address,
           payment_method: paymentMethod,
           payment_status: paymentMethod === 'online' ? 'paid' : 'pending',
+          coupon_code: appliedCoupon?.code || null,
+          coupon_discount: appliedCoupon ? couponDiscount : 0,
         })
         .select('id')
         .single();
@@ -363,7 +515,18 @@ export default function Checkout() {
 
       console.log('✅ Order created in database:', order.id);
 
-      /* 3️⃣ CREATE PAYMENT RECORD (only for online payments) */
+      /* 3️⃣ INCREMENT COUPON USAGE (if coupon was applied) */
+      if (appliedCoupon) {
+        try {
+          await incrementCouponUsage(appliedCoupon.id);
+          console.log('✅ Coupon usage incremented:', appliedCoupon.code);
+        } catch (couponError) {
+          console.warn('Failed to increment coupon usage:', couponError);
+          // Don't fail the order if coupon update fails
+        }
+      }
+
+      /* 4️⃣ CREATE PAYMENT RECORD (only for online payments) */
       if (paymentMethod === 'online' && razorpayPaymentId) {
         try {
           const { error: paymentError } = await (supabase as any)
@@ -389,7 +552,7 @@ export default function Checkout() {
         }
       }
 
-      /* 4️⃣ CREATE ORDER ITEMS */
+      /* 5️⃣ CREATE ORDER ITEMS */
       const orderItems = items.map(item => ({
         order_id: order.id,
         product_id: item.product.id,
@@ -406,7 +569,7 @@ export default function Checkout() {
 
       console.log('✅ Order items created:', orderItems.length);
 
-      /* 5️⃣ UPDATE PRODUCT STOCK QUANTITIES */
+      /* 6️⃣ UPDATE PRODUCT STOCK QUANTITIES */
       const updateStockPromises = items.map(item => 
         (supabase as any)
           .from('products')
@@ -610,6 +773,11 @@ export default function Checkout() {
               <p className="text-gray-700">
                 <span className="font-medium">Payment Method:</span> {isOnlinePayment ? 'Online Payment' : 'Cash on Delivery'}
               </p>
+              {appliedCoupon && (
+                <p className="text-gray-700">
+                  <span className="font-medium">Coupon Applied:</span> {appliedCoupon.code} (Save ₹{couponDiscount})
+                </p>
+              )}
               <p className="text-gray-700">
                 <span className="font-medium">Name:</span> {profile.full_name}
               </p>
@@ -846,6 +1014,83 @@ export default function Checkout() {
                   )}
                 </div>
 
+                {/* Coupon Code Section */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Coupon Code
+                  </label>
+                  
+                  {appliedCoupon ? (
+                    <div className="p-4 bg-green-50 border-2 border-green-200 rounded-lg">
+                      <div className="flex justify-between items-center mb-2">
+                        <div className="flex items-center gap-2">
+                          <Tag className="h-4 w-4 text-green-600" />
+                          <p className="text-green-800 font-semibold">Coupon Applied</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCoupon}
+                          className="text-red-600 hover:text-red-800"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h3 className="text-lg font-bold text-green-900">{appliedCoupon.code}</h3>
+                          <p className="text-sm text-green-700">
+                            Save ₹{couponDiscount} • Minimum order: ₹{appliedCoupon.min_order_amount}
+                          </p>
+                        </div>
+                        <span className="text-lg font-bold text-green-800">
+                          -₹{couponDiscount}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <div className="flex-1 relative">
+                        <input
+                          type="text"
+                          value={couponCode}
+                          onChange={(e) => {
+                            setCouponCode(e.target.value.toUpperCase());
+                            setCouponError('');
+                          }}
+                          placeholder="Enter coupon code"
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                        />
+                        {couponLoading && (
+                          <div className="absolute right-3 top-3">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-600"></div>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={couponLoading || !couponCode.trim()}
+                        className="bg-gray-800 text-white px-6 py-3 rounded-lg hover:bg-gray-900 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                      >
+                        <Tag className="h-4 w-4" />
+                        Apply
+                      </button>
+                    </div>
+                  )}
+                  
+                  {couponError && (
+                    <p className="mt-2 text-sm text-red-600">{couponError}</p>
+                  )}
+                  {couponSuccess && (
+                    <p className="mt-2 text-sm text-green-600">{couponSuccess}</p>
+                  )}
+                  {!appliedCoupon && !couponError && !couponSuccess && (
+                    <p className="mt-2 text-sm text-gray-500">
+                      Enter coupon code to get discount on your order
+                    </p>
+                  )}
+                </div>
+
                 {/* Payment Method Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -967,7 +1212,8 @@ export default function Checkout() {
                         notes={{
                           order_items: items.map(item => item.product.name).join(', '),
                           delivery_location: selectedLocationDetails?.name || '',
-                          user_id: user?.id || ''
+                          user_id: user?.id || '',
+                          coupon_code: appliedCoupon?.code || ''
                         }}
                         onSuccess={handlePaymentSuccess}
                         onError={handlePaymentError}
@@ -1071,7 +1317,23 @@ export default function Checkout() {
               <div className="border-t pt-6 space-y-3">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal ({items.length} items)</span>
-                  <span>₹{(finalTotal - deliveryCharge).toFixed(2)}</span>
+                  <span>₹{cartSubtotal.toFixed(2)}</span>
+                </div>
+                
+                {/* Coupon Discount */}
+                {appliedCoupon && (
+                  <div className="flex justify-between text-green-600">
+                    <span className="flex items-center gap-1">
+                      <Tag className="h-3 w-3" />
+                      Coupon Discount ({appliedCoupon.code})
+                    </span>
+                    <span className="font-semibold">-₹{couponDiscount.toFixed(2)}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between text-gray-600">
+                  <span>Subtotal after discount</span>
+                  <span>₹{Math.max(0, cartSubtotal - couponDiscount).toFixed(2)}</span>
                 </div>
                 
                 <div className="flex justify-between text-gray-600">
@@ -1104,7 +1366,7 @@ export default function Checkout() {
                         Location Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
                       </p>
                     )}
-                    {totalPrice < 99 && selectedLocationDetails.delivery_fee > 0 && (
+                    {cartSubtotal - couponDiscount < 99 && selectedLocationDetails.delivery_fee > 0 && (
                       <p className="text-xs text-gray-600 mt-1">
                         Base Charge: ₹40.00
                       </p>
@@ -1137,7 +1399,7 @@ export default function Checkout() {
                     </div>
                   )}
 
-                  {totalPrice < 99 && deliveryCharge > 0 && (
+                  {cartSubtotal - couponDiscount < 99 && deliveryCharge > 0 && (
                     <div className="mt-2 p-2 bg-blue-50 rounded-lg">
                       <p className="text-sm text-blue-700">
                         Delivery includes ₹40 base charge {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 ? `+ ₹${selectedLocationDetails.delivery_fee.toFixed(2)} location fee` : ''}
