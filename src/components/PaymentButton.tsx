@@ -19,6 +19,7 @@ interface PaymentButtonProps {
   onSuccess?: (response: RazorpaySuccessResponse) => void;
   onError?: (error: any) => void;
   onClose?: () => void;
+  disabled?: boolean; // Add disabled prop
 }
 
 const CREATE_ORDER_URL =
@@ -40,7 +41,8 @@ const PaymentButton: React.FC<PaymentButtonProps> = ({
   children,
   onSuccess,
   onError,
-  onClose
+  onClose,
+  disabled = false, // Add disabled prop with default
 }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +119,11 @@ const PaymentButton: React.FC<PaymentButtonProps> = ({
      Main Payment Handler
   ---------------------------------------- */
   const handlePayment = async () => {
+    // Prevent payment if disabled
+    if (disabled) {
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
@@ -194,8 +201,8 @@ const PaymentButton: React.FC<PaymentButtonProps> = ({
     <div className="payment-button-wrapper">
       <button
         onClick={handlePayment}
-        disabled={loading}
-        className={`px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors ${className}`}
+        disabled={loading || disabled} // Combine loading and disabled states
+        className={`px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors ${className} ${disabled ? 'opacity-50' : ''}`}
       >
         {loading ? "Processing..." : children || `Pay ₹${amount}`}
       </button>

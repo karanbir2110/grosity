@@ -45,6 +45,13 @@ export default function Checkout() {
     address: '',
   });
 
+  // Form validation states
+  const [formErrors, setFormErrors] = useState({
+    full_name: false,
+    mobile: false,
+    delivery_location: false
+  });
+
   /* =======================
      SITE STATUS CHECK
      ======================= */
@@ -177,6 +184,42 @@ export default function Checkout() {
         address: `${location.name} - ${location.description}`
       }));
     }
+    // Clear delivery location error when location is selected
+    setFormErrors(prev => ({
+      ...prev,
+      delivery_location: false
+    }));
+  };
+
+  /* =======================
+     VALIDATE FORM
+     ======================= */
+  const validateForm = (): boolean => {
+    const errors = {
+      full_name: !profile.full_name.trim(),
+      mobile: !profile.mobile.trim() || profile.mobile.length !== 10,
+      delivery_location: !selectedLocation
+    };
+
+    setFormErrors(errors);
+
+    // Check if any field has errors
+    const hasErrors = Object.values(errors).some(error => error);
+    
+    if (hasErrors) {
+      // Scroll to first error
+      if (errors.full_name) {
+        document.querySelector('input[name="full_name"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (errors.mobile) {
+        document.querySelector('input[name="mobile"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (errors.delivery_location) {
+        document.querySelector('input[name="delivery-location"]')?.closest('div')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      
+      return false;
+    }
+    
+    return true;
   };
 
   /* =======================
@@ -241,6 +284,18 @@ export default function Checkout() {
     return calculatedTotal;
   }, [totalPrice, calculateDeliveryCharge, items]);
 
+  // Check if form is valid for payment
+  const isFormValidForPayment = useMemo(() => {
+    return (
+      profile.full_name.trim() !== '' &&
+      profile.mobile.trim() !== '' &&
+      profile.mobile.length === 10 &&
+      selectedLocation !== '' &&
+      finalTotal > 0 &&
+      items.length > 0
+    );
+  }, [profile.full_name, profile.mobile, selectedLocation, finalTotal, items.length]);
+
   /* =======================
      CREATE ORDER IN DATABASE
      ======================= */
@@ -249,12 +304,9 @@ export default function Checkout() {
       throw new Error('User not authenticated');
     }
 
-    if (!profile.full_name || !profile.mobile) {
-      throw new Error('Please fill all personal details');
-    }
-
-    if (!selectedLocation) {
-      throw new Error('Please select a delivery location');
+    // Validate form before creating order
+    if (!validateForm()) {
+      throw new Error('Please fill all required fields correctly');
     }
 
     if (items.length === 0) {
@@ -389,6 +441,11 @@ export default function Checkout() {
       console.log('💰 Payment Success Response:', response);
       console.log('📦 Final Total being processed:', finalTotal);
       
+      // Validate form before proceeding
+      if (!validateForm()) {
+        throw new Error('Please fill all required fields correctly');
+      }
+
       // Validate amount again
       if (finalTotal <= 0) {
         throw new Error(`Cannot process order with amount: ₹${finalTotal}. Please add items to your cart.`);
@@ -436,6 +493,11 @@ export default function Checkout() {
   const handleCashOnDelivery = async (e: FormEvent) => {
     e.preventDefault();
     
+    // Validate form before proceeding
+    if (!validateForm()) {
+      return;
+    }
+
     // Validate amount
     if (finalTotal <= 0) {
       alert(`Cannot place order with amount: ₹${finalTotal}. Please add items to your cart.`);
@@ -625,14 +687,24 @@ export default function Checkout() {
                   </label>
                   <input
                     type="text"
+                    name="full_name"
                     value={profile.full_name}
-                    onChange={e =>
-                      setProfile({ ...profile, full_name: e.target.value })
-                    }
+                    onChange={e => {
+                      setProfile({ ...profile, full_name: e.target.value });
+                      // Clear error when user starts typing
+                      if (formErrors.full_name) {
+                        setFormErrors(prev => ({ ...prev, full_name: false }));
+                      }
+                    }}
                     placeholder="Enter your full name"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition ${
+                      formErrors.full_name ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     required
                   />
+                  {formErrors.full_name && (
+                    <p className="mt-1 text-sm text-red-600">Please enter your full name</p>
+                  )}
                 </div>
 
                 {/* Mobile Field */}
@@ -642,17 +714,30 @@ export default function Checkout() {
                   </label>
                   <input
                     type="tel"
+                    name="mobile"
                     value={profile.mobile}
-                    onChange={e =>
-                      setProfile({ ...profile, mobile: e.target.value })
-                    }
+                    onChange={e => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setProfile({ ...profile, mobile: value });
+                      // Clear error when user starts typing
+                      if (formErrors.mobile) {
+                        setFormErrors(prev => ({ ...prev, mobile: false }));
+                      }
+                    }}
                     placeholder="Enter your 10-digit mobile number"
-                    pattern="[0-9]{10}"
-                    maxLength={10}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition ${
+                      formErrors.mobile ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     required
                   />
-                  <p className="text-xs text-gray-500 mt-1">10-digit mobile number without country code</p>
+                  <div className="flex justify-between items-center mt-1">
+                    <p className="text-xs text-gray-500">10-digit mobile number without country code</p>
+                    {formErrors.mobile && (
+                      <p className="text-sm text-red-600">
+                        {!profile.mobile ? 'Please enter mobile number' : 'Mobile number must be 10 digits'}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* Delivery Location Section */}
@@ -673,7 +758,9 @@ export default function Checkout() {
                       <p className="text-sm text-gray-500 mt-1">Please contact support.</p>
                     </div>
                   ) : (
-                    <div className="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+                    <div className={`grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2 ${
+                      formErrors.delivery_location ? 'border-2 border-red-300 rounded-lg p-2' : ''
+                    }`}>
                       {deliveryLocations.map(location => (
                         <div
                           key={location.id}
@@ -722,6 +809,10 @@ export default function Checkout() {
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  {formErrors.delivery_location && (
+                    <p className="mt-2 text-sm text-red-600">Please select a delivery location</p>
                   )}
 
                   {/* Information Note */}
@@ -851,6 +942,18 @@ export default function Checkout() {
                         Please add items to your cart or check product prices.
                       </p>
                     </div>
+                  ) : !isFormValidForPayment ? (
+                    <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <p className="text-yellow-700 font-medium">
+                        ⚠️ Please fill all required fields to proceed with payment
+                      </p>
+                      <ul className="text-yellow-600 text-sm mt-2 space-y-1">
+                        {!profile.full_name.trim() && <li>• Full name is required</li>}
+                        {!profile.mobile.trim() && <li>• Mobile number is required</li>}
+                        {profile.mobile.length !== 10 && profile.mobile.trim() && <li>• Mobile number must be 10 digits</li>}
+                        {!selectedLocation && <li>• Delivery location is required</li>}
+                      </ul>
+                    </div>
                   ) : (
                     <>
                       <PaymentButton
@@ -870,6 +973,7 @@ export default function Checkout() {
                         onError={handlePaymentError}
                         onClose={handlePaymentClose}
                         className="w-full py-4 text-lg"
+                        disabled={!isFormValidForPayment}
                       >
                         <div className="flex items-center justify-center gap-2">
                           <CreditCard className="h-5 w-5" />
@@ -886,7 +990,7 @@ export default function Checkout() {
               ) : (
                 <button
                   type="submit"
-                  disabled={loading || !selectedLocation || deliveryLocations.length === 0 || finalTotal <= 0}
+                  disabled={loading || !isFormValidForPayment}
                   className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg relative overflow-hidden group"
                 >
                   {loading ? (
@@ -899,14 +1003,9 @@ export default function Checkout() {
                   ) : (
                     `Place Order - ₹${finalTotal.toFixed(2)} (Cash on Delivery)`
                   )}
-                  {!selectedLocation && deliveryLocations.length > 0 && (
+                  {!isFormValidForPayment && (
                     <span className="block text-sm font-normal mt-1 text-red-100">
-                      * Please select a delivery location
-                    </span>
-                  )}
-                  {finalTotal <= 0 && (
-                    <span className="block text-sm font-normal mt-1 text-red-100">
-                      * Cannot place order with ₹0 total
+                      * Please fill all required fields
                     </span>
                   )}
                 </button>
