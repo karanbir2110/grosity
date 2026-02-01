@@ -1,9 +1,44 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Minus, Plus, Trash2, ShoppingBag, ArrowRight } from 'lucide-react';
 import { useCart } from '../context/CartContext';
+import { useEffect, useState } from 'react';
+import siteService from '../services/siteService';
 
 export default function Cart() {
+  const navigate = useNavigate();
   const { items, updateQuantity, removeFromCart, totalPrice, totalItems } = useCart();
+  const [checkingStatus, setCheckingStatus] = useState(true);
+
+  // Check if site is live
+  useEffect(() => {
+    const checkSiteStatus = async () => {
+      try {
+        const isLive = await siteService.isSiteLive();
+        if (!isLive) {
+          navigate('/maintenance');
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking site status:', error);
+      } finally {
+        setCheckingStatus(false);
+      }
+    };
+
+    checkSiteStatus();
+  }, [navigate]);
+
+  // Loading state while checking site status
+  if (checkingStatus) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-12 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading cart...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (items.length === 0) {
     return (

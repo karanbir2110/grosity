@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import PaymentButton from '../components/PaymentButton';
+import siteService from '../services/siteService';
 import type { RazorpaySuccessResponse } from '../types/razorpay.d';
 
 interface ProfileForm {
@@ -27,6 +28,7 @@ export default function Checkout() {
   const { user } = useAuth();
   const { items, totalPrice, clearCart } = useCart();
 
+  const [checkingSiteStatus, setCheckingSiteStatus] = useState(true);
   const [loading, setLoading] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
@@ -44,10 +46,33 @@ export default function Checkout() {
   });
 
   /* =======================
+     SITE STATUS CHECK
+     ======================= */
+  useEffect(() => {
+    const checkSiteStatus = async () => {
+      try {
+        const isLive = await siteService.isSiteLive();
+        if (!isLive) {
+          navigate('/maintenance');
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking site status:', error);
+      } finally {
+        setCheckingSiteStatus(false);
+      }
+    };
+
+    checkSiteStatus();
+  }, [navigate]);
+
+  /* =======================
      AUTHENTICATION CHECK
      ======================= */
   useEffect(() => {
-    // Give a moment for auth to initialize
+    // Only check auth after site status is verified
+    if (checkingSiteStatus) return;
+
     const timer = setTimeout(() => {
       setIsInitialized(true);
       
@@ -61,15 +86,18 @@ export default function Checkout() {
           } 
         });
       }
-    }, 800); // Increased timeout to ensure auth is loaded
+    }, 800);
 
     return () => clearTimeout(timer);
-  }, [user, navigate]);
+  }, [user, navigate, checkingSiteStatus]);
 
   /* =======================
      FETCH DELIVERY LOCATIONS
      ======================= */
   useEffect(() => {
+    // Only fetch locations after site status check
+    if (checkingSiteStatus) return;
+
     const fetchDeliveryLocations = async () => {
       try {
         setLocationsLoading(true);
@@ -95,15 +123,16 @@ export default function Checkout() {
     };
 
     fetchDeliveryLocations();
-  }, []);
+  }, [checkingSiteStatus]);
 
   /* =======================
      FETCH PROFILE
      ======================= */
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (!user || deliveryLocations.length === 0) return;
+    // Only fetch profile after locations are loaded
+    if (!user || deliveryLocations.length === 0 || checkingSiteStatus) return;
 
+    const fetchProfile = async () => {
       try {
         const { data } = await (supabase as any)
           .from('profiles')
@@ -134,7 +163,7 @@ export default function Checkout() {
     };
 
     fetchProfile();
-  }, [user, deliveryLocations]);
+  }, [user, deliveryLocations, checkingSiteStatus]);
 
   /* =======================
      HANDLE LOCATION SELECTION
@@ -428,7 +457,19 @@ export default function Checkout() {
     }
   };
 
-  // Show loading while initializing
+  // Show loading while checking site status
+  if (checkingSiteStatus) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Checking site status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading while initializing auth
   if (!isInitialized) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">

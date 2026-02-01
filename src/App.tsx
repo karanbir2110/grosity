@@ -17,7 +17,7 @@ import Contact from './pages/Contact';
 import ResetPassword from './pages/ResetPassword';
 import ForgotPassword from './pages/Forgotpassword';
 import TestPaymentPage from './pages/TestPayment';
-
+import MaintenancePage from './components/MaintenancePage';
 function App() {
   return (
     <Router>
@@ -41,6 +41,7 @@ function App() {
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/test-payment" element={<TestPaymentPage />} />
+                <Route path="/maintenance" element={<MaintenancePage />} />
               </Routes>
             </main>
             <Footer />
