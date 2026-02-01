@@ -172,7 +172,7 @@ const MaintenancePage: React.FC = () => {
                   {isNight ? 'NIGHT TIME' : 'OFFLINE'}
                 </div>
                 <div className="text-xs text-gray-400">
-                  {isNight ? '9:00 PM - 8:00 AM' : 'Check back soon'}
+                  {isNight ? '9:00 PM - 9:00 AM' : 'Check back soon'}
                 </div>
               </div>
             </div>
@@ -216,7 +216,7 @@ const MaintenancePage: React.FC = () => {
             <div className="mt-6 pt-6 border-t border-gray-700/50">
               <p className="text-gray-300 text-center">
                 <span className="font-semibold">Note:</span> {isNight 
-                  ? 'You can browse products and add items to your cart, but checkout and delivery will be available from 8:00 AM tomorrow.'
+                  ? 'You can browse products and add items to your cart, but checkout and delivery will be available from 9:00 AM tomorrow.'
                   : 'Delivery services resume during business hours. You can still browse our products.'}
               </p>
             </div>
