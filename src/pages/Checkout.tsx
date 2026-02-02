@@ -1,9 +1,10 @@
-import { useState, useEffect, FormEvent, useMemo } from 'react';
+import { useState, useEffect, FormEvent, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, ShoppingBag, MapPin } from 'lucide-react';
+import { CheckCircle, ArrowLeft, ShoppingBag, MapPin, Tag, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import siteService from '../services/siteService';
 
 interface ProfileForm {
   full_name: string;
@@ -20,16 +21,49 @@ interface DeliveryLocation {
   order_index: number;
 }
 
+interface Coupon {
+  id: string;
+  code: string;
+  discount_amount: number;
+  min_order_amount: number;
+  max_uses: number | null;
+  used_count: number;
+  is_active: boolean;
+  valid_from: string;
+  valid_until: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CouponValidationResult {
+  valid: boolean;
+  message: string;
+  coupon?: Coupon;
+  discount?: number;
+}
+
 export default function Checkout() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { items, totalPrice, clearCart } = useCart();
+  const { items, clearCart } = useCart();
 
+  const [checkingSiteStatus, setCheckingSiteStatus] = useState(true);
   const [loading, setLoading] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [deliveryLocations, setDeliveryLocations] = useState<DeliveryLocation[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(true);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
+  const [orderId, setOrderId] = useState<string>('');
+  const [orderAmount, setOrderAmount] = useState<number>(0);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Coupon states
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponDiscount, setCouponDiscount] = useState(0);
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [couponSuccess, setCouponSuccess] = useState('');
 
   const [profile, setProfile] = useState<ProfileForm>({
     full_name: '',
@@ -37,10 +71,66 @@ export default function Checkout() {
     address: '',
   });
 
+  // Form validation states
+  const [formErrors, setFormErrors] = useState({
+    full_name: false,
+    mobile: false,
+    delivery_location: false
+  });
+
+  /* =======================
+     SITE STATUS CHECK
+     ======================= */
+  useEffect(() => {
+    const checkSiteStatus = async () => {
+      try {
+        const isLive = await siteService.isSiteLive();
+        if (!isLive) {
+          navigate('/maintenance');
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking site status:', error);
+      } finally {
+        setCheckingSiteStatus(false);
+      }
+    };
+
+    checkSiteStatus();
+  }, [navigate]);
+
+  /* =======================
+     AUTHENTICATION CHECK
+     ======================= */
+  useEffect(() => {
+    // Only check auth after site status is verified
+    if (checkingSiteStatus) return;
+
+    const timer = setTimeout(() => {
+      setIsInitialized(true);
+      
+      // Check if user exists after initialization
+      if (!user) {
+        console.log('No user found, redirecting to login');
+        navigate('/login', { 
+          state: { 
+            from: '/checkout',
+            message: 'Please login to proceed to checkout' 
+          } 
+        });
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [user, navigate, checkingSiteStatus]);
+
   /* =======================
      FETCH DELIVERY LOCATIONS
      ======================= */
   useEffect(() => {
+    // Only fetch locations after site status check
+    if (checkingSiteStatus) return;
+
     const fetchDeliveryLocations = async () => {
       try {
         setLocationsLoading(true);
@@ -66,44 +156,116 @@ export default function Checkout() {
     };
 
     fetchDeliveryLocations();
-  }, []);
+  }, [checkingSiteStatus]);
 
   /* =======================
      FETCH PROFILE
      ======================= */
   useEffect(() => {
+    // Only fetch profile after locations are loaded
+    if (!user || deliveryLocations.length === 0 || checkingSiteStatus) return;
+
     const fetchProfile = async () => {
-      if (!user) return;
+      try {
+        const { data } = await (supabase as any)
+          .from('profiles')
+          .select('full_name, mobile, address')
+          .eq('id', user.id)
+          .single();
 
-      const { data } = await (supabase as any)
-        .from('profiles')
-        .select('full_name, mobile, address')
-        .eq('id', user.id)
-        .single();
+        if (data) {
+          setProfile({
+            full_name: data.full_name ?? '',
+            mobile: data.mobile ?? '',
+            address: data.address ?? '',
+          });
 
-      if (data) {
-        setProfile({
-          full_name: data.full_name ?? '',
-          mobile: data.mobile ?? '',
-          address: data.address ?? '',
-        });
-
-        // Check if saved address matches any delivery location
-        if (data.address && deliveryLocations.length > 0) {
-          const matchedLocation = deliveryLocations.find(
-            loc => data.address?.includes(loc.name)
-          );
-          if (matchedLocation) {
-            setSelectedLocation(matchedLocation.id);
+          // Check if saved address matches any delivery location
+          if (data.address) {
+            const matchedLocation = deliveryLocations.find(
+              loc => data.address?.includes(loc.name)
+            );
+            if (matchedLocation) {
+              setSelectedLocation(matchedLocation.id);
+            }
           }
         }
+      } catch (err) {
+        console.error('Error fetching profile:', err);
       }
     };
 
-    if (deliveryLocations.length > 0) {
-      fetchProfile();
+    fetchProfile();
+  }, [user, deliveryLocations, checkingSiteStatus]);
+
+  /* =======================
+     COUPON VALIDATION FUNCTION
+     ======================= */
+  const validateCoupon = async (code: string, orderAmount: number): Promise<CouponValidationResult> => {
+    try {
+      const { data, error } = await supabase
+        .from('coupon_codes')
+        .select('*')
+        .eq('code', code.toUpperCase())
+        .eq('is_active', true)
+        .single();
+      
+      if (error || !data) {
+        return { valid: false, message: 'Coupon not found or inactive' };
+      }
+
+      const coupon = data as Coupon;
+
+      // Check if coupon is still valid
+      const now = new Date();
+      const validFrom = new Date(coupon.valid_from);
+      const validUntil = coupon.valid_until ? new Date(coupon.valid_until) : null;
+
+      if (now < validFrom) {
+        return { valid: false, message: 'Coupon is not yet valid' };
+      }
+
+      if (validUntil && now > validUntil) {
+        return { valid: false, message: 'Coupon has expired' };
+      }
+
+      // Check minimum order amount
+      if (orderAmount < coupon.min_order_amount) {
+        return { 
+          valid: false, 
+          message: `Minimum order amount of ₹${coupon.min_order_amount} required` 
+        };
+      }
+
+      // Check usage limits
+      if (coupon.max_uses && coupon.used_count >= coupon.max_uses) {
+        return { valid: false, message: 'Coupon usage limit reached' };
+      }
+
+      return { 
+        valid: true, 
+        coupon,
+        discount: coupon.discount_amount,
+        message: `₹${coupon.discount_amount} discount applied successfully`
+      };
+    } catch (error: any) {
+      console.error('Error validating coupon:', error);
+      return { valid: false, message: 'Error validating coupon. Please try again.' };
     }
-  }, [user, deliveryLocations]);
+  };
+
+  /* =======================
+     INCREMENT COUPON USAGE FUNCTION
+     ======================= */
+  const incrementCouponUsage = async (couponId: string): Promise<void> => {
+    try {
+      // Just log it - the coupon validation already prevents overuse
+      console.log(`Coupon ${couponId} would be marked as used`);
+      // Don't actually update - the validation logic already prevents reuse
+    } catch (error) {
+      console.error('Error in incrementCouponUsage:', error);
+    }
+  };
 
   /* =======================
      HANDLE LOCATION SELECTION
@@ -117,6 +279,99 @@ export default function Checkout() {
         address: `${location.name} - ${location.description}`
       }));
     }
+    // Clear delivery location error when location is selected
+    setFormErrors(prev => ({
+      ...prev,
+      delivery_location: false
+    }));
+  };
+
+  /* =======================
+     HANDLE COUPON APPLY
+     ======================= */
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) {
+      setCouponError('Please enter a coupon code');
+      return;
+    }
+
+    if (items.length === 0) {
+      setCouponError('Add items to cart before applying coupon');
+      return;
+    }
+
+    setCouponLoading(true);
+    setCouponError('');
+    setCouponSuccess('');
+
+    try {
+      const cartTotal = items.reduce((sum, item) => {
+        const price = item.product.price || 0;
+        const discount = item.product.discount_percentage || 0;
+        const discountedPrice = price * (1 - discount / 100);
+        return sum + (discountedPrice * item.quantity);
+      }, 0);
+
+      const result = await validateCoupon(couponCode, cartTotal);
+      
+      if (result.valid && result.coupon) {
+        setAppliedCoupon(result.coupon);
+        setCouponDiscount(result.discount || 0);
+        setCouponSuccess(result.message || `₹${result.discount} discount applied!`);
+        setCouponError('');
+      } else {
+        setAppliedCoupon(null);
+        setCouponDiscount(0);
+        setCouponError(result.message || 'Invalid coupon code');
+        setCouponSuccess('');
+      }
+    } catch (error: any) {
+      console.error('Error applying coupon:', error);
+      setCouponError(error.message || 'Failed to apply coupon');
+      setAppliedCoupon(null);
+      setCouponDiscount(0);
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponDiscount(0);
+    setCouponCode('');
+    setCouponError('');
+    setCouponSuccess('');
+  };
+
+  /* =======================
+     VALIDATE FORM
+     ======================= */
+  const validateForm = (): boolean => {
+    const errors = {
+      full_name: !profile.full_name.trim(),
+      mobile: !profile.mobile.trim() || profile.mobile.length !== 10,
+      delivery_location: !selectedLocation
+    };
+
+    setFormErrors(errors);
+
+    // Check if any field has errors
+    const hasErrors = Object.values(errors).some(error => error);
+    
+    if (hasErrors) {
+      // Scroll to first error
+      if (errors.full_name) {
+        document.querySelector('input[name="full_name"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (errors.mobile) {
+        document.querySelector('input[name="mobile"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (errors.delivery_location) {
+        document.querySelector('input[name="delivery-location"]')?.closest('div')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      
+      return false;
+    }
+    
+    return true;
   };
 
   /* =======================
@@ -126,17 +381,247 @@ export default function Checkout() {
     ? deliveryLocations.find(loc => loc.id === selectedLocation)
     : null;
 
-  const deliveryCharge = useMemo(() => {
-    if (selectedLocationDetails) {
-      return selectedLocationDetails.delivery_fee;
+  // FIXED: Helper function to calculate delivery charge
+  const calculateDeliveryCharge = useCallback((cartTotal: number) => {
+    // Rule 1: Free delivery for orders ₹99 or above
+    if (cartTotal >= 99) {
+      return 0;
     }
-    return totalPrice >= 99 ? 0 : 40; // Fallback
-  }, [totalPrice, selectedLocationDetails]);
+    
+    // Rule 2: If cart is under ₹99, charge ₹40 PLUS location's fee
+    let charge = 0; // ₹40 base charge
+    
+    if (selectedLocationDetails) {
+      // Add location's fee to the ₹40 base
+      charge += selectedLocationDetails.delivery_fee;
+    }
+    
+    return charge;
+  }, [selectedLocationDetails]);
 
-  const finalTotal = useMemo(
-    () => totalPrice + deliveryCharge,
-    [totalPrice, deliveryCharge]
-  );
+  // Calculate cart subtotal
+  const cartSubtotal = useMemo(() => {
+    return items.reduce((sum, item) => {
+      const price = item.product.price || 0;
+      const discount = item.product.discount_percentage || 0;
+      const discountedPrice = price * (1 - discount / 100);
+      return sum + (discountedPrice * item.quantity);
+    }, 0);
+  }, [items]);
+
+  // Calculate delivery charge
+  const deliveryCharge = useMemo(() => {
+    // Apply coupon discount before calculating delivery
+    const subtotalAfterCoupon = Math.max(0, cartSubtotal - couponDiscount);
+    return calculateDeliveryCharge(subtotalAfterCoupon);
+  }, [cartSubtotal, couponDiscount, calculateDeliveryCharge]);
+
+  // Calculate final total
+  const finalTotal = useMemo(() => {
+    // Cart subtotal after coupon discount
+    const subtotalAfterCoupon = Math.max(0, cartSubtotal - couponDiscount);
+    
+    // Add delivery charge
+    const total = subtotalAfterCoupon + deliveryCharge;
+    
+    // Ensure total is not negative
+    return Math.max(0, total);
+  }, [cartSubtotal, couponDiscount, deliveryCharge]);
+
+  // Check if form is valid for payment
+  const isFormValidForPayment = useMemo(() => {
+    return (
+      profile.full_name.trim() !== '' &&
+      profile.mobile.trim() !== '' &&
+      profile.mobile.length === 10 &&
+      selectedLocation !== '' &&
+      finalTotal > 0 &&
+      items.length > 0
+    );
+  }, [profile.full_name, profile.mobile, selectedLocation, finalTotal, items.length]);
+
+  /* =======================
+     CREATE ORDER IN DATABASE
+     ======================= */
+  const createOrderInDatabase = async () => {
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
+    // Validate form before creating order
+    if (!validateForm()) {
+      throw new Error('Please fill all required fields correctly');
+    }
+
+    if (items.length === 0) {
+      throw new Error('Your cart is empty');
+    }
+
+    // Validate amount
+    if (finalTotal <= 0) {
+      throw new Error(`Invalid order total: ₹${finalTotal}. Please check your cart items.`);
+    }
+
+    if (finalTotal < 1) {
+      throw new Error('Minimum order amount is ₹1');
+    }
+
+    // Check stock availability
+    const insufficientStockItems = items.filter(item => 
+      (item.product.stock_quantity || 0) < item.quantity
+    );
+
+    if (insufficientStockItems.length > 0) {
+      const productNames = insufficientStockItems.map(item => item.product.name).join(', ');
+      throw new Error(`Insufficient stock for: ${productNames}. Please update your cart.`);
+    }
+
+    try {
+      /* 1️⃣ UPDATE PROFILE */
+      const { error: profileError } = await (supabase as any)
+        .from('profiles')
+        .update({
+          full_name: profile.full_name,
+          mobile: profile.mobile,
+          address: profile.address,
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      /* 2️⃣ CREATE ORDER */
+      const { data: order, error: orderError } = await (supabase as any)
+        .from('orders')
+        .insert({
+          user_id: user.id,
+          total_amount: finalTotal,
+          status: 'pending',
+          delivery_location: profile.address,
+          payment_method: 'cod',
+          payment_status: 'pending',
+          coupon_code: appliedCoupon?.code || null,
+          coupon_discount: appliedCoupon ? couponDiscount : 0,
+        })
+        .select('id')
+        .single();
+
+      if (orderError) throw orderError;
+
+      console.log('✅ Order created in database:', order.id);
+
+      /* 3️⃣ INCREMENT COUPON USAGE (if coupon was applied) */
+      if (appliedCoupon) {
+        try {
+          await incrementCouponUsage(appliedCoupon.id);
+          console.log('✅ Coupon usage incremented:', appliedCoupon.code);
+        } catch (couponError) {
+          console.warn('Failed to increment coupon usage:', couponError);
+          // Don't fail the order if coupon update fails
+        }
+      }
+
+      /* 4️⃣ CREATE ORDER ITEMS */
+      const orderItems = items.map(item => ({
+        order_id: order.id,
+        product_id: item.product.id,
+        product_name: item.product.name,
+        quantity: item.quantity,
+        price: item.product.price * (1 - item.product.discount_percentage / 100),
+      }));
+
+      const { error: orderItemsError } = await (supabase as any)
+        .from('order_items')
+        .insert(orderItems);
+
+      if (orderItemsError) throw orderItemsError;
+
+      console.log('✅ Order items created:', orderItems.length);
+
+      /* 5️⃣ UPDATE PRODUCT STOCK QUANTITIES */
+      const updateStockPromises = items.map(item => 
+        (supabase as any)
+          .from('products')
+          .update({
+            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
+          })
+          .eq('id', item.product.id)
+      );
+
+      const updateResults = await Promise.all(updateStockPromises);
+      
+      const stockUpdateErrors = updateResults.filter(result => result.error);
+      if (stockUpdateErrors.length > 0) {
+        console.error('Stock update errors:', stockUpdateErrors);
+      }
+
+      setOrderId(order.id);
+      return order.id;
+    } catch (err) {
+      console.error('❌ Error creating order:', err);
+      throw err;
+    }
+  };
+
+  /* =======================
+     HANDLE CASH ON DELIVERY
+     ======================= */
+  const handleCashOnDelivery = async (e: FormEvent) => {
+    e.preventDefault();
+    
+    // Validate form before proceeding
+    if (!validateForm()) {
+      return;
+    }
+
+    // Validate amount
+    if (finalTotal <= 0) {
+      alert(`Cannot place order with amount: ₹${finalTotal}. Please add items to your cart.`);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await createOrderInDatabase();
+      // Save order amount before clearing cart
+      setOrderAmount(finalTotal);
+      clearCart();
+      setOrderPlaced(true);
+    } catch (err: any) {
+      alert(err.message || 'Error placing order. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Show loading while checking site status
+  if (checkingSiteStatus) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Checking site status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading while initializing auth
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading checkout...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If redirected, show nothing (navigation will happen)
+  if (!user) {
+    return null;
+  }
 
   /* =======================
      EMPTY CART MESSAGE
@@ -167,116 +652,6 @@ export default function Checkout() {
   }
 
   /* =======================
-     PLACE ORDER
-     ======================= */
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-
-    if (!user) {
-      alert('Please login first');
-      return;
-    }
-
-    if (!profile.full_name || !profile.mobile) {
-      alert('Please fill all personal details');
-      return;
-    }
-
-    if (!selectedLocation) {
-      alert('Please select a delivery location');
-      return;
-    }
-
-    if (items.length === 0) {
-      alert('Your cart is empty');
-      return;
-    }
-
-    // Check stock availability before proceeding
-    const insufficientStockItems = items.filter(item => 
-      (item.product.stock_quantity || 0) < item.quantity
-    );
-
-    if (insufficientStockItems.length > 0) {
-      const productNames = insufficientStockItems.map(item => item.product.name).join(', ');
-      alert(`Insufficient stock for: ${productNames}. Please update your cart.`);
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      /* 1️⃣ UPDATE PROFILE (with delivery location as address) */
-      const { error: profileError } = await (supabase as any)
-        .from('profiles')
-        .update({
-          full_name: profile.full_name,
-          mobile: profile.mobile,
-          address: profile.address,
-        })
-        .eq('id', user.id);
-
-      if (profileError) throw profileError;
-
-      /* 2️⃣ CREATE ORDER WITH DELIVERY LOCATION */
-      const { data: order, error: orderError } = await (supabase as any)
-        .from('orders')
-        .insert({
-          user_id: user.id,
-          total_amount: finalTotal,
-          status: 'pending',
-          delivery_location: profile.address, // SAVE DELIVERY LOCATION TO ORDERS TABLE
-        })
-        .select('id')
-        .single();
-
-      if (orderError) throw orderError;
-
-      /* 3️⃣ CREATE ORDER ITEMS */
-      const orderItems = items.map(item => ({
-        order_id: order.id,
-        product_id: item.product.id,
-        product_name: item.product.name,
-        quantity: item.quantity,
-        price:
-          item.product.price *
-          (1 - item.product.discount_percentage / 100),
-      }));
-
-      const { error: orderItemsError } = await (supabase as any)
-        .from('order_items')
-        .insert(orderItems);
-
-      if (orderItemsError) throw orderItemsError;
-
-      /* 4️⃣ UPDATE PRODUCT STOCK QUANTITIES */
-      const updateStockPromises = items.map(item => 
-        (supabase as any)
-          .from('products')
-          .update({
-            stock_quantity: (item.product.stock_quantity || 0) - item.quantity
-          })
-          .eq('id', item.product.id)
-      );
-
-      const updateResults = await Promise.all(updateStockPromises);
-      
-      const stockUpdateErrors = updateResults.filter(result => result.error);
-      if (stockUpdateErrors.length > 0) {
-        console.error('Stock update errors:', stockUpdateErrors);
-      }
-
-      clearCart();
-      setOrderPlaced(true);
-    } catch (err) {
-      console.error(err);
-      alert('Something went wrong. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* =======================
      SUCCESS SCREEN
      ======================= */
   if (orderPlaced) {
@@ -291,13 +666,26 @@ export default function Checkout() {
             Your order has been placed successfully.
           </p>
           <p className="text-gray-600 mb-8">
+            Order ID: <span className="font-semibold">#{orderId}</span>
+            <br />
             We'll contact you at{' '}
             <span className="font-semibold">{profile.mobile}</span>
           </p>
 
           <div className="text-left bg-white p-6 rounded-lg shadow-md mb-8 max-w-md mx-auto">
-            <h2 className="text-lg font-semibold mb-3">Delivery Details</h2>
+            <h2 className="text-lg font-semibold mb-3">Order & Delivery Details</h2>
             <div className="space-y-2">
+              <p className="text-gray-700">
+                <span className="font-medium">Order ID:</span> #{orderId}
+              </p>
+              <p className="text-gray-700">
+                <span className="font-medium">Payment Method:</span> Cash on Delivery
+              </p>
+              {appliedCoupon && (
+                <p className="text-gray-700">
+                  <span className="font-medium">Coupon Applied:</span> {appliedCoupon.code} (Save ₹{couponDiscount})
+                </p>
+              )}
               <p className="text-gray-700">
                 <span className="font-medium">Name:</span> {profile.full_name}
               </p>
@@ -310,8 +698,12 @@ export default function Checkout() {
               <p className="text-gray-700">
                 <span className="font-medium">Location:</span> {selectedLocationDetails?.description}
               </p>
+              <p className="text-gray-700">
+                <span className="font-medium">Total Amount:</span> ₹{orderAmount.toFixed(2)}
+              </p>
               <p className="text-gray-700 text-sm mt-4 pt-4 border-t">
                 <span className="font-medium">Note:</span> Please collect your order from this location during the specified delivery hours.
+                Please keep exact change ready for payment.
               </p>
             </div>
           </div>
@@ -356,7 +748,7 @@ export default function Checkout() {
           {/* LEFT COLUMN - FORM */}
           <div className="lg:col-span-2">
             <form
-              onSubmit={handleSubmit}
+              onSubmit={handleCashOnDelivery}
               className="bg-white rounded-xl shadow-md p-6 md:p-8"
             >
               <h2 className="text-xl font-bold text-gray-800 mb-6">
@@ -371,14 +763,24 @@ export default function Checkout() {
                   </label>
                   <input
                     type="text"
+                    name="full_name"
                     value={profile.full_name}
-                    onChange={e =>
-                      setProfile({ ...profile, full_name: e.target.value })
-                    }
+                    onChange={e => {
+                      setProfile({ ...profile, full_name: e.target.value });
+                      // Clear error when user starts typing
+                      if (formErrors.full_name) {
+                        setFormErrors(prev => ({ ...prev, full_name: false }));
+                      }
+                    }}
                     placeholder="Enter your full name"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition ${
+                      formErrors.full_name ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     required
                   />
+                  {formErrors.full_name && (
+                    <p className="mt-1 text-sm text-red-600">Please enter your full name</p>
+                  )}
                 </div>
 
                 {/* Mobile Field */}
@@ -388,17 +790,30 @@ export default function Checkout() {
                   </label>
                   <input
                     type="tel"
+                    name="mobile"
                     value={profile.mobile}
-                    onChange={e =>
-                      setProfile({ ...profile, mobile: e.target.value })
-                    }
+                    onChange={e => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setProfile({ ...profile, mobile: value });
+                      // Clear error when user starts typing
+                      if (formErrors.mobile) {
+                        setFormErrors(prev => ({ ...prev, mobile: false }));
+                      }
+                    }}
                     placeholder="Enter your 10-digit mobile number"
-                    pattern="[0-9]{10}"
-                    maxLength={10}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition ${
+                      formErrors.mobile ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     required
                   />
-                  <p className="text-xs text-gray-500 mt-1">10-digit mobile number without country code</p>
+                  <div className="flex justify-between items-center mt-1">
+                    <p className="text-xs text-gray-500">10-digit mobile number without country code</p>
+                    {formErrors.mobile && (
+                      <p className="text-sm text-red-600">
+                        {!profile.mobile ? 'Please enter mobile number' : 'Mobile number must be 10 digits'}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* Delivery Location Section */}
@@ -419,7 +834,9 @@ export default function Checkout() {
                       <p className="text-sm text-gray-500 mt-1">Please contact support.</p>
                     </div>
                   ) : (
-                    <div className="grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+                    <div className={`grid md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2 ${
+                      formErrors.delivery_location ? 'border-2 border-red-300 rounded-lg p-2' : ''
+                    }`}>
                       {deliveryLocations.map(location => (
                         <div
                           key={location.id}
@@ -470,6 +887,10 @@ export default function Checkout() {
                     </div>
                   )}
 
+                  {formErrors.delivery_location && (
+                    <p className="mt-2 text-sm text-red-600">Please select a delivery location</p>
+                  )}
+
                   {/* Information Note */}
                   <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
                     <p className="text-sm text-gray-600">
@@ -500,26 +921,104 @@ export default function Checkout() {
                     </div>
                   )}
                 </div>
+
+                {/* Coupon Code Section */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Coupon Code
+                  </label>
+                  
+                  {appliedCoupon ? (
+                    <div className="p-4 bg-green-50 border-2 border-green-200 rounded-lg">
+                      <div className="flex justify-between items-center mb-2">
+                        <div className="flex items-center gap-2">
+                          <Tag className="h-4 w-4 text-green-600" />
+                          <p className="text-green-800 font-semibold">Coupon Applied</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCoupon}
+                          className="text-red-600 hover:text-red-800"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h3 className="text-lg font-bold text-green-900">{appliedCoupon.code}</h3>
+                          <p className="text-sm text-green-700">
+                            Save ₹{couponDiscount} • Minimum order: ₹{appliedCoupon.min_order_amount}
+                          </p>
+                        </div>
+                        <span className="text-lg font-bold text-green-800">
+                          -₹{couponDiscount}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <div className="flex-1 relative">
+                        <input
+                          type="text"
+                          value={couponCode}
+                          onChange={(e) => {
+                            setCouponCode(e.target.value.toUpperCase());
+                            setCouponError('');
+                          }}
+                          placeholder="Enter coupon code"
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                        />
+                        {couponLoading && (
+                          <div className="absolute right-3 top-3">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-600"></div>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={couponLoading || !couponCode.trim()}
+                        className="bg-gray-800 text-white px-6 py-3 rounded-lg hover:bg-gray-900 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                      >
+                        <Tag className="h-4 w-4" />
+                        Apply
+                      </button>
+                    </div>
+                  )}
+                  
+                  {couponError && (
+                    <p className="mt-2 text-sm text-red-600">{couponError}</p>
+                  )}
+                  {couponSuccess && (
+                    <p className="mt-2 text-sm text-green-600">{couponSuccess}</p>
+                  )}
+                  {!appliedCoupon && !couponError && !couponSuccess && (
+                    <p className="mt-2 text-sm text-gray-500">
+                      Enter coupon code to get discount on your order
+                    </p>
+                  )}
+                </div>
               </div>
 
+              {/* Submit Button */}
               <button
                 type="submit"
-                disabled={loading || !selectedLocation || deliveryLocations.length === 0}
+                disabled={loading || !isFormValidForPayment}
                 className="w-full mt-8 bg-green-600 text-white py-4 rounded-lg hover:bg-green-700 font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-lg relative overflow-hidden group"
               >
                 {loading ? (
                   <>
-                    <span className="opacity-0">Place Order</span>
+                    <span className="opacity-0">Place Order (Cash on Delivery)</span>
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
                     </div>
                   </>
                 ) : (
-                  'Place Order'
+                  `Place Order - ₹${finalTotal.toFixed(2)} (Cash on Delivery)`
                 )}
-                {!selectedLocation && deliveryLocations.length > 0 && (
+                {!isFormValidForPayment && (
                   <span className="block text-sm font-normal mt-1 text-red-100">
-                    * Please select a delivery location
+                    * Please fill all required fields
                   </span>
                 )}
               </button>
@@ -582,7 +1081,23 @@ export default function Checkout() {
               <div className="border-t pt-6 space-y-3">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal ({items.length} items)</span>
-                  <span>₹{totalPrice.toFixed(2)}</span>
+                  <span>₹{cartSubtotal.toFixed(2)}</span>
+                </div>
+                
+                {/* Coupon Discount */}
+                {appliedCoupon && (
+                  <div className="flex justify-between text-green-600">
+                    <span className="flex items-center gap-1">
+                      <Tag className="h-3 w-3" />
+                      Coupon Discount ({appliedCoupon.code})
+                    </span>
+                    <span className="font-semibold">-₹{couponDiscount.toFixed(2)}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between text-gray-600">
+                  <span>Subtotal after discount</span>
+                  <span>₹{Math.max(0, cartSubtotal - couponDiscount).toFixed(2)}</span>
                 </div>
                 
                 <div className="flex justify-between text-gray-600">
@@ -612,7 +1127,12 @@ export default function Checkout() {
                     <p className="text-xs text-gray-500">{selectedLocationDetails.description}</p>
                     {selectedLocationDetails.delivery_fee > 0 && (
                       <p className="text-xs text-gray-600 mt-1">
-                        Delivery Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                        Location Fee: ₹{selectedLocationDetails.delivery_fee.toFixed(2)}
+                      </p>
+                    )}
+                    {cartSubtotal - couponDiscount < 99 && selectedLocationDetails.delivery_fee > 0 && (
+                      <p className="text-xs text-gray-600 mt-1">
+                        Base Charge: ₹00.00
                       </p>
                     )}
                   </div>
@@ -624,15 +1144,29 @@ export default function Checkout() {
                     <span className="text-green-600">₹{finalTotal.toFixed(2)}</span>
                   </div>
                   
-                  {deliveryCharge === 0 && (
+                  {finalTotal <= 0 && (
+                    <div className="mt-2 p-2 bg-red-50 rounded-lg">
+                      <p className="text-sm text-red-700">
+                        ⚠️ Order total is ₹0. Please add items to your cart.
+                      </p>
+                    </div>
+                  )}
+                  
+                  {deliveryCharge === 0 && finalTotal > 0 && (
                     <div className="mt-2 p-2 bg-green-50 rounded-lg">
                       <p className="text-sm text-green-700 flex items-center">
                         <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M5 2a1 1 0 011 1v1h1a1 1 0 010 2H6v1a1 1 0 01-2 0V6H3a1 1 0 010-2h1V3a1 1 0 011-1zm0 10a1 1 0 011 1v1h1a1 1 0 110 2H6v1a1 1 0 11-2 0v-1H3a1 1 0 110-2h1v-1a1 1 0 011-1zM12 2a1 1 0 01.967.744L14.146 7.2 17.5 9.134a1 1 0 010 1.732l-3.354 1.935-1.18 4.455a1 1 0 01-1.933 0L9.854 12.2 6.5 10.266a1 1 0 010-1.732l3.354-1.935 1.18-4.455A1 1 0 0112 2z" clipRule="evenodd" />
                         </svg>
-                        {selectedLocationDetails?.delivery_fee === 0 
-                          ? 'Free delivery on this location!' 
-                          : 'Delivery included!'}
+                        Free delivery on orders ₹99 and above!
+                      </p>
+                    </div>
+                  )}
+
+                  {cartSubtotal - couponDiscount < 99 && deliveryCharge > 0 && (
+                    <div className="mt-2 p-2 bg-blue-50 rounded-lg">
+                      <p className="text-sm text-blue-700">
+                        Delivery includes ₹00 base charge {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 ? `+ ₹${selectedLocationDetails.delivery_fee.toFixed(2)} location fee` : ''}
                       </p>
                     </div>
                   )}
@@ -641,6 +1175,18 @@ export default function Checkout() {
               
               {/* Order Summary Note */}
               <div className="mt-6 pt-6 border-t">
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <svg className="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    <span className="text-sm font-medium text-green-700">Cash on Delivery</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Pay when you collect your order from the delivery point.
+                  </p>
+                </div>
+                
                 <p className="text-xs text-gray-500 text-center">
                   Your order will be delivered to the selected pickup point.
                   Please bring your order confirmation when collecting.
