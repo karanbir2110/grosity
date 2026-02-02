@@ -154,13 +154,13 @@ export default function Cart() {
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery</span>
-                  <span>{totalPrice >= 99 ? 'FREE' : '₹40.00'}</span>
+                  <span>{totalPrice >= 99 ? 'FREE' : '₹00.00'}</span>
                 </div>
                 <div className="border-t pt-3">
                   <div className="flex justify-between text-xl font-bold text-gray-900">
                     <span>Total</span>
                     <span>
-                      ₹{(totalPrice + (totalPrice >= 99 ? 0 : 40)).toFixed(2)}
+                      ₹{(totalPrice + (totalPrice >= 99 ? 0 : 1)).toFixed(2)}
                     </span>
                   </div>
                 </div>
