@@ -154,7 +154,7 @@ export default function Cart() {
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery</span>
-                  <span>{totalPrice >= 99 ? 'FREE' : '₹00.00'}</span>
+                  <span>{totalPrice >= 99 ? 'FREE' : '₹1.00'}</span>
                 </div>
                 <div className="border-t pt-3">
                   <div className="flex justify-between text-xl font-bold text-gray-900">
