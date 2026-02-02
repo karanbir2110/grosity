@@ -395,7 +395,7 @@ const incrementCouponUsage = async (couponId: string): Promise<void> => {
     }
     
     // Rule 2: If cart is under ₹99, charge ₹40 PLUS location's fee
-    let charge = 40; // ₹40 base charge
+    let charge = 0; // ₹40 base charge
     
     if (selectedLocationDetails) {
       // Add location's fee to the ₹40 base
@@ -1368,7 +1368,7 @@ const incrementCouponUsage = async (couponId: string): Promise<void> => {
                     )}
                     {cartSubtotal - couponDiscount < 99 && selectedLocationDetails.delivery_fee > 0 && (
                       <p className="text-xs text-gray-600 mt-1">
-                        Base Charge: ₹40.00
+                        Base Charge: ₹00.00
                       </p>
                     )}
                   </div>
@@ -1402,7 +1402,7 @@ const incrementCouponUsage = async (couponId: string): Promise<void> => {
                   {cartSubtotal - couponDiscount < 99 && deliveryCharge > 0 && (
                     <div className="mt-2 p-2 bg-blue-50 rounded-lg">
                       <p className="text-sm text-blue-700">
-                        Delivery includes ₹40 base charge {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 ? `+ ₹${selectedLocationDetails.delivery_fee.toFixed(2)} location fee` : ''}
+                        Delivery includes ₹00 base charge {selectedLocationDetails && selectedLocationDetails.delivery_fee > 0 ? `+ ₹${selectedLocationDetails.delivery_fee.toFixed(2)} location fee` : ''}
                       </p>
                     </div>
                   )}
