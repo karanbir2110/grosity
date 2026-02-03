@@ -182,9 +182,37 @@ export default function Checkout() {
 
           // Check if saved address matches any delivery location
           if (data.address) {
+            const userAddress = data.address.toLowerCase().trim();
+            
             const matchedLocation = deliveryLocations.find(
-              loc => data.address?.includes(loc.name)
+              loc => {
+                const locationName = loc.name.toLowerCase().trim();
+                
+                // Multiple matching strategies for better accuracy
+                return (
+                  // Exact match
+                  userAddress === locationName ||
+                  
+                  // Contains with word boundaries (space before and after)
+                  userAddress.includes(` ${locationName} `) ||
+                  
+                  // Starts with location name followed by space or comma
+                  userAddress.startsWith(locationName + ' ') ||
+                  userAddress.startsWith(locationName + ',') ||
+                  
+                  // Ends with location name preceded by space or comma
+                  userAddress.endsWith(' ' + locationName) ||
+                  userAddress.endsWith(',' + locationName) ||
+                  
+                  // Location name contains user address (for shorter location names)
+                  locationName.includes(userAddress) ||
+                  
+                  // Split address into parts and check if any part matches
+                  userAddress.split(/[\s,]+/).some((part: string) => part === locationName)
+                );
+              }
             );
+            
             if (matchedLocation) {
               setSelectedLocation(matchedLocation.id);
             }
