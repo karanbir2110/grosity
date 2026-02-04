@@ -27,7 +27,7 @@ export default function Home() {
 
   return (
     <div>
-      <section className="relative bg-gradient-to-br from-green-50 to-emerald-100 py-20 px-4">
+      <section className="relative bg-gradient-to-br from-green-50 to-emerald-100 py-8 px-4">
         <div className="max-w-7xl mx-auto">
           <div className="grid md:grid-cols-2 gap-12 items-center">
             <div>
