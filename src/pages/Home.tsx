@@ -203,7 +203,7 @@ export default function Home() {
                 <p className={`${isStoreOffline ? 'text-gray-500' : 'text-gray-600'}`}>
                   {isStoreOffline 
                     ? 'Resumes tomorrow at 9:00 AM'
-                    : 'On orders above ₹99'}
+                    : 'On orders above ₹0'}
                 </p>
               </div>
             </div>
