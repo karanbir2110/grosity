@@ -4,8 +4,8 @@ import { Instagram, Mail, Phone, MapPin, Leaf, Linkedin, MessageCircle } from 'l
 export default function Footer() {
   return (
     <footer className="bg-gray-900 text-gray-300">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-8">
           <div>
             <Link to="/" className="flex items-center space-x-2 text-white mb-4">
               <Leaf className="h-8 w-8 text-green-500" />
@@ -14,14 +14,14 @@ export default function Footer() {
             <p className="text-sm mb-4">
               Freshly produced, delivered straight from the farms to your doorstep.
             </p>
-            <div className="flex space-x-4">
+            <div className="flex space-x-4 mt-4">
               <a 
                 href="https://www.linkedin.com/company/grosityindia/" 
                 target="_blank" 
                 rel="noopener noreferrer" 
                 className="hover:text-green-500 transition"
               >
-                <Linkedin className="h-5 w-5" />
+                <Linkedin className="h-6 w-6" />
               </a>
               <a 
                 href="https://www.instagram.com/grosityindia" 
@@ -29,7 +29,7 @@ export default function Footer() {
                 rel="noopener noreferrer" 
                 className="hover:text-green-500 transition"
               >
-                <Instagram className="h-5 w-5" />
+                <Instagram className="h-6 w-6" />
               </a>
               <a 
                 href="https://wa.me/message/2HGRVAHSLXX6K1" 
@@ -37,7 +37,7 @@ export default function Footer() {
                 rel="noopener noreferrer" 
                 className="hover:text-green-500 transition"
               >
-                <MessageCircle className="h-5 w-5" />
+                <MessageCircle className="h-6 w-6" />
               </a>
             </div>
           </div>
@@ -94,7 +94,7 @@ export default function Footer() {
             <ul className="space-y-3">
               <li className="flex items-start space-x-2">
                 <MapPin className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
-                <span className="text-sm">Thapar Institute Of Engineering and Technology,147003</span>
+                <span className="text-sm leading-relaxed">Thapar Institute Of Engineering and Technology,147003</span>
               </li>
               <li className="flex items-center space-x-2">
                 <Phone className="h-5 w-5 text-green-500" />
@@ -109,7 +109,7 @@ export default function Footer() {
         </div>
 
         <div className="border-t border-gray-800 mt-8 pt-8">
-          <div className="flex flex-col md:flex-row justify-between items-center">
+          <div className="flex flex-col md:flex-row justify-between items-center text-center md:text-left">
             <p className="text-sm">
               &copy; 2025 Grosity. All rights reserved.
             </p>
