@@ -216,7 +216,7 @@ export default function Shop() {
                 <Minus className="h-4 w-4" />
               </button>
               <span className="text-lg font-semibold text-green-800">
-                {quantity} in cart
+                {quantity} 
               </span>
               <button
                 onClick={() => handleIncrement(product)}
