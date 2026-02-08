@@ -269,7 +269,7 @@ const MaintenancePage: React.FC = () => {
               <h3 className="text-xl font-bold">Check Status</h3>
             </div>
             <p className="text-gray-400 mb-4">
-              Check if we're back online. Auto-checks every 30 seconds.
+              Check if we're back online. Auto-checks every 30 seconds. Click to check manually.
             </p>
             <button
               onClick={handleRefresh}
