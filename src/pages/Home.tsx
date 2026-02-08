@@ -56,6 +56,7 @@ export default function Home() {
   };
 
   return (
+
     <div className="relative">
       {/* Store Offline Notification Banner */}
       {isStoreOffline && showNotification && !checkingStoreStatus && (
@@ -95,13 +96,14 @@ export default function Home() {
       )}
 
       {/* Main Content */}
-      <section className="relative bg-gradient-to-br from-green-50 to-emerald-100 pt-20 pb-20 px-4">
         {/* Optional: Add subtle overlay when store is offline */}
         {isStoreOffline && (
           <div className="absolute inset-0 bg-black/5 pointer-events-none z-10"></div>
         )}
         
-        <div className="max-w-7xl mx-auto relative z-20">
+      <section className="relative bg-gradient-to-br from-green-50 to-emerald-100 py-8 px-4">
+        <div className="max-w-7xl mx-auto relative z-20"></div>
+        <div className="max-w-7xl mx-auto">
           <div className="grid md:grid-cols-2 gap-12 items-center">
             <div>
               {/* Store Status Badge */}
