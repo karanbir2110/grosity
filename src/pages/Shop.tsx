@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { Search, SlidersHorizontal, ShoppingCart, Minus, Plus } from 'lucide-react';
+import { Search, SlidersHorizontal, ShoppingCart, Minus, Plus, Filter } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Category, Product } from '../types/database';
 import { useCart } from '../context/CartContext';
@@ -19,6 +19,19 @@ export default function Shop() {
   const [sortBy, setSortBy] = useState('name');
   const [cartAnimation, setCartAnimation] = useState(false);
   const { items, addToCart, updateQuantity } = useCart();
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Check if mobile on mount and resize
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024); // lg breakpoint
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Helper function to get quantity for a product
   const getItemQuantity = (productId: string) => {
@@ -52,21 +65,21 @@ export default function Shop() {
   };
 
   useEffect(() => {
-  async function fetchData() {
-    const [categoriesRes, productsRes] = await Promise.all([
-      supabase.from('categories').select('*'),
-      supabase.from('products').select('*')
-        .eq('is_available', true)
-        .eq('is_visible', true),  // ← ADD THIS
-    ]);
+    async function fetchData() {
+      const [categoriesRes, productsRes] = await Promise.all([
+        supabase.from('categories').select('*'),
+        supabase.from('products').select('*')
+          .eq('is_available', true)
+          .eq('is_visible', true),
+      ]);
 
-    if (categoriesRes.data) setCategories(categoriesRes.data);
-    if (productsRes.data) setProducts(productsRes.data);
-    setLoading(false);
-  }
+      if (categoriesRes.data) setCategories(categoriesRes.data);
+      if (productsRes.data) setProducts(productsRes.data);
+      setLoading(false);
+    }
 
-  fetchData();
-}, []);
+    fetchData();
+  }, []);
 
   useEffect(() => {
     let filtered = [...products];
@@ -234,6 +247,139 @@ export default function Shop() {
     );
   };
 
+  // Desktop Sidebar Filters
+  const DesktopFilters = () => (
+    <div className="lg:col-span-1">
+      <div className="bg-white rounded-lg shadow-md p-6 sticky top-24">
+        <div className="flex items-center space-x-2 mb-6">
+          <SlidersHorizontal className="h-5 w-5 text-green-600" />
+          <h2 className="text-xl font-bold text-gray-900">Filters</h2>
+        </div>
+
+        <div className="mb-6">
+          <h3 className="font-semibold text-gray-900 mb-3">Categories</h3>
+          <div className="space-y-2">
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="radio"
+                name="category"
+                checked={selectedCategory === ''}
+                onChange={() => handleCategoryChange('')}
+                className="text-green-600 focus:ring-green-600"
+              />
+              <span className="text-gray-700">All Products</span>
+            </label>
+            {categories.map((category) => (
+              <label
+                key={category.id}
+                className="flex items-center space-x-2 cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="category"
+                  checked={selectedCategory === category.slug}
+                  onChange={() => handleCategoryChange(category.slug)}
+                  className="text-green-600 focus:ring-green-600"
+                />
+                <span className="text-gray-700">{category.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <h3 className="font-semibold text-gray-900 mb-3">Filters</h3>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showOrganic}
+              onChange={(e) => setShowOrganic(e.target.checked)}
+              className="rounded text-green-600 focus:ring-green-600"
+            />
+            <span className="text-gray-700">Organic Only</span>
+          </label>
+        </div>
+
+        <div>
+          <h3 className="font-semibold text-gray-900 mb-3">Sort By</h3>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-600"
+          >
+            <option value="name">Name (A-Z)</option>
+            <option value="price-low">Price (Low to High)</option>
+            <option value="price-high">Price (High to Low)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Mobile Filter Hover Panel (Triggered by button)
+  const MobileFilterPanel = () => (
+    <div className="lg:hidden">
+      {/* Mobile Filter Button */}
+      <button 
+        onClick={() => setShowMobileFilters(!showMobileFilters)}
+        className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-full shadow-md hover:bg-green-700 transition mb-4"
+      >
+        <Filter className="h-4 w-4" />
+        <span className="text-sm font-medium">Filter</span>
+      </button>
+
+      {/* Mobile Filter Panel */}
+      {showMobileFilters && (
+        <div className="bg-white shadow-xl rounded-xl p-4 mb-6 border">
+          <div className="space-y-4">
+            {/* Category */}
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-gray-700 mb-2">Category</span>
+              <select
+                value={selectedCategory}
+                onChange={(e) => handleCategoryChange(e.target.value)}
+                className="border rounded-lg px-3 py-2 text-sm w-full"
+              >
+                <option value="">All</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.slug}>{cat.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Organic */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="mobile-organic"
+                checked={showOrganic}
+                onChange={(e) => setShowOrganic(e.target.checked)}
+                className="rounded text-green-600 focus:ring-green-600"
+              />
+              <label htmlFor="mobile-organic" className="text-sm text-gray-700 cursor-pointer">
+                Organic Only
+              </label>
+            </div>
+
+            {/* Sort */}
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-gray-700 mb-2">Sort By</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="border rounded-lg px-3 py-2 text-sm w-full"
+              >
+                <option value="name">Name (A-Z)</option>
+                <option value="price-low">Price Low → High</option>
+                <option value="price-high">Price High → Low</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className={`min-h-screen bg-gray-50 transition-all duration-300 ${cartAnimation ? 'scale-[1.002]' : ''}`}>
       {/* Cart Animation Overlay */}
@@ -251,6 +397,7 @@ export default function Shop() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Search Bar */}
         <div className="mb-8">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
@@ -264,70 +411,22 @@ export default function Shop() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-6">
-          {/* Top Filter Bar */}
-            <div className="flex items-center justify-between mb-6">
+        <div className="grid lg:grid-cols-4 gap-8">
+          {/* Desktop Sidebar Filters */}
+          <div className="hidden lg:block">
+            <DesktopFilters />
+          </div>
 
-              {/* Left: Filter Button + Hover Panel */}
-              <div className="relative group">
-                <button className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-full shadow-md hover:bg-green-700 transition">
-                  <SlidersHorizontal className="h-4 w-4" />
-                  <span className="text-sm font-medium">Filter</span>
-                </button>
+          <div className="lg:col-span-3">
+            {/* Mobile Filter Panel */}
+            <MobileFilterPanel />
 
-                {/* Hover Panel */}
-                <div className="absolute left-0 mt-3 hidden group-hover:flex bg-white shadow-xl rounded-xl p-4 gap-6 z-50 border">
-
-                  {/* Category */}
-                  <div className="flex flex-col">
-                    <span className="text-xs font-semibold text-gray-500 mb-1">Category</span>
-                    <select
-                      value={selectedCategory}
-                      onChange={(e) => handleCategoryChange(e.target.value)}
-                      className="border rounded-lg px-3 py-1 text-sm"
-                    >
-                      <option value="">All</option>
-                      {categories.map((cat) => (
-                        <option key={cat.id} value={cat.slug}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Organic */}
-                  <div className="flex items-center gap-2 mt-4">
-                    <input
-                      type="checkbox"
-                      checked={showOrganic}
-                      onChange={(e) => setShowOrganic(e.target.checked)}
-                    />
-                    <span className="text-sm">Organic Only</span>
-                  </div>
-
-                  {/* Sort */}
-                  <div className="flex flex-col">
-                    <span className="text-xs font-semibold text-gray-500 mb-1">Sort</span>
-                    <select
-                      value={sortBy}
-                      onChange={(e) => setSortBy(e.target.value)}
-                      className="border rounded-lg px-3 py-1 text-sm"
-                    >
-                      <option value="name">Name (A-Z)</option>
-                      <option value="price-low">Price Low → High</option>
-                      <option value="price-high">Price High → Low</option>
-                    </select>
-                  </div>
-
-                </div>
-              </div>
-
-              {/* Right: Product Count */}
-              <p className="text-gray-600 text-sm">
-                Showing {filteredProducts.length} of {products.length}
+            {/* Results Count */}
+            <div className="mb-6 flex justify-between items-center">
+              <p className="text-gray-600">
+                Showing {filteredProducts.length} of {products.length} products
               </p>
             </div>
-
-    
-
 
             {loading ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -353,6 +452,6 @@ export default function Shop() {
           </div>
         </div>
       </div>
-
+    </div>
   );
 }
